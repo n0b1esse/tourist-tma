@@ -34,9 +34,13 @@
 DATABASE_URL=postgresql+asyncpg://postgres.<ref>:<pass>@aws-0-eu-central-1.pooler.supabase.com:6543/postgres
 ```
 
-Код сам включает `ssl=require` и `statement_cache_size=0` для хостов
+Код сам включает TLS и `statement_cache_size=0` для хостов
 `*.supabase.co` / `pooler.supabase.com` (см. `build_connect_args` в
-`backend/app/core/database.py`). Вручную `?ssl=` дописывать не нужно.
+`backend/app/core/database.py`): для `postgresql+asyncpg://` это `ssl=True`,
+для `postgresql+psycopg://` (alembic offline) — `sslmode=require`.
+Вручную `?ssl=` дописывать не нужно — этот legacy-параметр вырезается
+из URL автоматически, т.к. psycopg падает на нём с
+`invalid connection option "ssl"`.
 
 ## 4. Применение схемы
 
@@ -58,5 +62,6 @@ alembic upgrade head
 | Симптом | Причина / лечение |
 |---|---|
 | `no pg_hba.conf entry / SSL` | нет TLS — проверь, что URL идёт через код с авто-SSL, а не напрямую |
+| `invalid connection option "ssl"` (psycopg) | в `DATABASE_URL` голый `postgresql://` без драйвера или legacy `?ssl=` — нужна схема `postgresql+asyncpg://` (код теперь чинит оба случая сам, но лучше поправить значение в Render) |
 | `prepared statement already exists` | пулер в transaction mode — лечится `statement_cache_size=0` (уже в коде) |
 | `type "geometry" does not exist` | не включён PostGIS в Dashboard (п. 2) |
