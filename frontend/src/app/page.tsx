@@ -6,31 +6,41 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import AddWaypointModal from "@/components/AddWaypointModal";
 import AdminDashboard from "@/components/AdminDashboard";
 import BottomNavigation from "@/components/BottomNavigation";
+import GpsTracker, { type LiveTrack } from "@/components/GpsTracker";
 import HomePage from "@/components/HomePage";
 import ModeSwitcher from "@/components/ModeSwitcher";
 import OnboardingTour, { markOnboardingDone, shouldShowOnboarding } from "@/components/OnboardingTour";
+import PedometerWidget from "@/components/PedometerWidget";
 import ProfileCard from "@/components/ProfileCard";
 import RouteCard from "@/components/RouteCard";
+import RouteDrawer from "@/components/RouteDrawer";
 import SupportModal from "@/components/SupportModal";
+import TrackSaveModal from "@/components/TrackSaveModal";
 import { tokens } from "@/styles/tokens";
 import type {
+  ActivityType,
   AppMode,
   Profile,
   RouteItem,
   Tab,
+  TrackPoint,
   WaypointCreate,
   WaypointItem,
 } from "@/types";
+import { ACTIVITY_META } from "@/types";
 import {
   authInitData,
   createCheckin,
   createWaypoint,
   deleteWaypoint,
   devLogin,
+  getMyRoutes,
   getProfile,
   getRoutes,
   getWaypoints,
   moderateWaypoint,
+  proposeRoute,
+  recordTrack,
 } from "@/utils/api";
 import {
   distanceM,
@@ -56,6 +66,7 @@ export default function Home() {
   const [tab, setTab] = useState<Tab>("home");
   const [mode, setMode] = useState<AppMode>("production");
   const [routes, setRoutes] = useState<RouteItem[]>([]);
+  const [myRoutes, setMyRoutes] = useState<RouteItem[]>([]);
   const [waypoints, setWaypoints] = useState<WaypointItem[]>([]);
   const [dataError, setDataError] = useState<string | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<number | null>(null);
@@ -64,21 +75,25 @@ export default function Home() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [devInput, setDevInput] = useState("");
 
-  // ТЗ §1: геолокация при старте (GPS → центр карты, отказ → Бишкек)
   const [geo, setGeo] = useState<{ lat: number; lon: number; granted: boolean } | null>(null);
   const [geoNote, setGeoNote] = useState<string | null>(null);
-
-  // ТЗ §4А: онбординг при первом входе
   const [showOnboarding, setShowOnboarding] = useState(false);
-
-  // ТЗ §4Б: быстрый чек-ин + выбранная точка (модерация на карте)
   const [selectedWp, setSelectedWp] = useState<WaypointItem | null>(null);
   const [checkinBusy, setCheckinBusy] = useState(false);
   const [checkinMsg, setCheckinMsg] = useState<string | null>(null);
   const [supportOpen, setSupportOpen] = useState(false);
   const [routeFilter, setRouteFilter] = useState<string>("Все");
+  const [activityFilter, setActivityFilter] = useState<"Все" | ActivityType>("Все");
 
-  // Тема Telegram (ТЗ §4В)
+  // Fitness: живой трек + черновик конструктора + модалка сохранения
+  const [liveTrack, setLiveTrack] = useState<LiveTrack | null>(null);
+  const [pendingTrack, setPendingTrack] = useState<{ track: LiveTrack; activity: ActivityType } | null>(null);
+  const [trackBusy, setTrackBusy] = useState(false);
+  const [trackError, setTrackError] = useState<string | null>(null);
+  const [trackMsg, setTrackMsg] = useState<string | null>(null);
+  const [drawerPoints, setDrawerPoints] = useState<TrackPoint[]>([]);
+  const [drawerMode, setDrawerMode] = useState(false);
+
   useEffect(() => {
     const apply = () => {
       const scheme = getColorScheme();
@@ -92,10 +107,8 @@ export default function Home() {
     return onThemeChanged(apply);
   }, []);
 
-  // Auth: внутри Telegram — initData, локально — dev-вход
   useEffect(() => {
     notifyReady();
-    // Deep-link от бота: ?route=ID
     try {
       const params = new URLSearchParams(window.location.search);
       const r = params.get("route");
@@ -128,7 +141,6 @@ export default function Home() {
     }
   }, []);
 
-  // Геолокация после готовности
   useEffect(() => {
     if (status !== "ready") return;
     let alive = true;
@@ -149,10 +161,11 @@ export default function Home() {
   const loadData = useCallback(async (id: number, m: AppMode) => {
     setDataError(null);
     try {
-      const [p, r, w] = await Promise.all([
+      const [p, r, w, mine] = await Promise.all([
         getProfile(id),
         getRoutes(id),
         getWaypoints(id, m),
+        getMyRoutes(id).catch(() => [] as RouteItem[]),
       ]);
       setProfile(p);
       if (m === "tester" && p.role !== "tester" && p.role !== "admin" && p.role !== "super_admin") {
@@ -162,7 +175,7 @@ export default function Home() {
         setWaypoints(w);
       }
       setRoutes(r);
-      // Онбординг — один раз после первой загрузки
+      setMyRoutes(mine);
       if (shouldShowOnboarding()) setShowOnboarding(true);
     } catch (e) {
       setDataError(e instanceof Error ? e.message : String(e));
@@ -173,6 +186,22 @@ export default function Home() {
     if (status === "ready" && telegramId != null) void loadData(telegramId, mode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, telegramId, mode]);
+
+  const refreshAll = useCallback(async () => {
+    if (telegramId == null) return;
+    try {
+      const [p, r, mine] = await Promise.all([
+        getProfile(telegramId),
+        getRoutes(telegramId),
+        getMyRoutes(telegramId).catch(() => [] as RouteItem[]),
+      ]);
+      setProfile(p);
+      setRoutes(r);
+      setMyRoutes(mine);
+    } catch (e) {
+      setDataError(e instanceof Error ? e.message : String(e));
+    }
+  }, [telegramId]);
 
   const handleDevLogin = async () => {
     if (!/^\d+$/.test(devInput.trim())) {
@@ -198,11 +227,16 @@ export default function Home() {
 
   const handleMapClick = useCallback(
     (lat: number, lng: number) => {
+      // Конструктор: клик добавляет точку черновика
+      if (drawerMode) {
+        setDrawerPoints((prev) => [...prev, { lat, lon: lng, ele: null, t: Date.now() }]);
+        return;
+      }
       if (mode !== "tester") return;
       setSaveError(null);
       setPendingClick({ lat, lng });
     },
-    [mode],
+    [mode, drawerMode],
   );
 
   const handleCreate = async (payload: WaypointCreate) => {
@@ -220,7 +254,6 @@ export default function Home() {
     }
   };
 
-  // Ближайшая точка в радиусе чек-ина
   const nearestInRadius: { w: WaypointItem; d: number } | null = useMemo(() => {
     if (!geo?.granted) return null;
     let best: { w: WaypointItem; d: number } | null = null;
@@ -246,7 +279,6 @@ export default function Home() {
       hapticImpact("heavy");
       const badges = res.awarded.length > 0 ? ` 🏅 ${res.awarded.join(", ")}!` : "";
       setCheckinMsg(`✅ Чек-ин засчитан!${badges}`);
-      // Обновляем профиль (бейджи/статистика)
       setProfile(await getProfile(telegramId));
     } catch (e) {
       setCheckinMsg(e instanceof Error ? e.message : String(e));
@@ -274,6 +306,54 @@ export default function Home() {
       setSelectedWp(null);
     } catch (e) {
       setDataError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doPropose = async (id: number) => {
+    if (telegramId == null) return;
+    try {
+      await proposeRoute(telegramId, id);
+      setTrackMsg("📤 Маршрут отправлен гидам на модерацию!");
+      await refreshAll();
+    } catch (e) {
+      setTrackMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const doSaveTrack = async (data: {
+    title: string;
+    description: string | null;
+    activity_type: ActivityType;
+    difficulty: string;
+    photo_url: string | null;
+  }) => {
+    if (telegramId == null || pendingTrack == null) return;
+    setTrackBusy(true);
+    setTrackError(null);
+    try {
+      const hours = Math.floor(pendingTrack.track.durationSec / 3600);
+      const mins = Math.round((pendingTrack.track.durationSec % 3600) / 60);
+      const res = await recordTrack(telegramId, {
+        title: data.title,
+        description: data.description,
+        activity_type: data.activity_type,
+        difficulty: data.difficulty,
+        track_points: pendingTrack.track.points,
+        steps_count: pendingTrack.track.steps,
+        photo_url: data.photo_url,
+        estimated_time: hours > 0 ? `${hours} ч ${mins} мин` : `${mins} мин`,
+      });
+      hapticImpact("heavy");
+      setPendingTrack(null);
+      setLiveTrack(null);
+      const badges = res.awarded.length > 0 ? ` 🏅 ${res.awarded.join(", ")}!` : "";
+      setTrackMsg(`✅ Трек сохранён! ${res.route.distance_km.toFixed(2)} км, ~${res.calories} ккал.${badges}`);
+      await refreshAll();
+      setTab("profile");
+    } catch (e) {
+      setTrackError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTrackBusy(false);
     }
   };
 
@@ -325,8 +405,11 @@ export default function Home() {
 
   const testerMode = mode === "tester";
   const isPrivileged = profile?.role === "admin" || profile?.role === "super_admin";
-  const filteredRoutes =
-    routeFilter === "Все" ? routes : routes.filter((r) => r.difficulty === routeFilter);
+  const filteredRoutes = routes.filter((r) => {
+    if (routeFilter !== "Все" && r.difficulty !== routeFilter) return false;
+    if (activityFilter !== "Все" && r.activity_type !== activityFilter) return false;
+    return true;
+  });
 
   return (
     <main className="mx-auto max-w-2xl px-4 pb-24 pt-4">
@@ -349,12 +432,16 @@ export default function Home() {
           📍 {geoNote}
         </p>
       )}
+      {trackMsg && (
+        <p className="mb-2 rounded-xl bg-success/15 p-2 text-body">{trackMsg}</p>
+      )}
 
       {tab === "home" && (
         <HomePage
           routes={routes}
           waypoints={waypoints}
           userLocation={geo}
+          telegramId={telegramId}
           onShowOnMap={(id) => {
             setSelectedRouteId(id);
             setTab("map");
@@ -369,6 +456,12 @@ export default function Home() {
               🧪 Tester-режим: жёлтые — черновики. Кликни по карте, чтобы создать точку.
             </p>
           )}
+          {drawerMode && (
+            <p className="rounded-xl bg-primary/15 p-2 text-caption">
+              ✏️ Конструктор: кликай по карте — точки идут в черновик (вкладка «Запись»).
+              <button onClick={() => setDrawerMode(false)} className="ml-2 underline">Выйти</button>
+            </p>
+          )}
           <MapView
             routes={routes}
             waypoints={waypoints}
@@ -377,12 +470,14 @@ export default function Home() {
             userLocation={geo}
             onMapClick={handleMapClick}
             onWaypointSelect={setSelectedWp}
+            liveTrack={liveTrack?.points ?? null}
+            draftPoints={drawerPoints}
+            drawerMode={drawerMode}
           />
           <p className="text-caption text-[var(--tma-hint)]">
-            Зелёные — published · Жёлтые — draft · Треки — GPX-линии маршрутов
+            Зелёные — published · Жёлтые — draft · Красная — запись трека · Пунктир — конструктор
           </p>
 
-          {/* Быстрый чек-ин (ТЗ §4Б) */}
           {nearestInRadius && (
             <button
               onClick={doCheckin}
@@ -398,7 +493,6 @@ export default function Home() {
             <p className="rounded-xl bg-[var(--tma-secondary-bg)] p-2 text-body">{checkinMsg}</p>
           )}
 
-          {/* Модерация/редактирование метки на карте (ТЗ §3) */}
           {selectedWp && (
             <div className="rounded-2xl bg-[var(--tma-secondary-bg)] p-3">
               <div className="flex items-center justify-between gap-2">
@@ -472,6 +566,58 @@ export default function Home() {
         </div>
       )}
 
+      {tab === "track" && (
+        <div className="space-y-3">
+          <PedometerWidget
+            telegramId={telegramId}
+            liveSteps={liveTrack?.steps}
+            liveDistanceKm={liveTrack?.distanceKm}
+          />
+          <GpsTracker
+            onFinish={(track, activity) => setPendingTrack({ track, activity })}
+            onUpdate={(t) => setLiveTrack(t.points.length > 0 ? t : null)}
+          />
+          {/* Мини-карта живого трека */}
+          {(liveTrack && liveTrack.points.length > 0) || drawerPoints.length > 0 ? (
+            <MapView
+              routes={[]}
+              waypoints={[]}
+              testerMode={false}
+              selectedRouteId={null}
+              userLocation={geo}
+              onMapClick={handleMapClick}
+              liveTrack={liveTrack?.points ?? null}
+              draftPoints={drawerPoints}
+              drawerMode={drawerMode}
+            />
+          ) : null}
+          {isPrivileged ? (
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  setDrawerMode((v) => !v);
+                  if (!drawerMode) setTab("map");
+                }}
+                className={`w-full rounded-xl py-2 font-semibold ${drawerMode ? "bg-accent text-white" : "bg-[var(--tma-secondary-bg)]"}`}
+              >
+                {drawerMode ? "✏️ Режим рисования ВКЛ — кликай по карте" : "✏️ Включить конструктор (рисование по карте)"}
+              </button>
+              <RouteDrawer
+                telegramId={telegramId}
+                draftPoints={drawerPoints}
+                onDraftChange={setDrawerPoints}
+                onPublished={refreshAll}
+              />
+            </div>
+          ) : (
+            <p className="rounded-xl bg-[var(--tma-secondary-bg)] p-2 text-caption text-[var(--tma-hint)]">
+              ✏️ Конструктор доступен гидам (admin). Твой трек после записи сохранится в «Мои прогулки»,
+              откуда его можно предложить гидам 📤
+            </p>
+          )}
+        </div>
+      )}
+
       {tab === "routes" && (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-1.5">
@@ -484,6 +630,19 @@ export default function Home() {
                 }`}
               >
                 {d}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(["Все", ...(Object.keys(ACTIVITY_META) as ActivityType[])] as const).map((a) => (
+              <button
+                key={a}
+                onClick={() => setActivityFilter(a)}
+                className={`rounded-full px-2.5 py-1 text-caption font-semibold ${
+                  activityFilter === a ? "bg-primary text-white" : "bg-[var(--tma-secondary-bg)] text-[var(--tma-hint)]"
+                }`}
+              >
+                {a === "Все" ? "Все типы" : `${ACTIVITY_META[a].emoji} ${ACTIVITY_META[a].label}`}
               </button>
             ))}
           </div>
@@ -506,7 +665,16 @@ export default function Home() {
       {tab === "profile" && (
         <>
           {profile ? (
-            <ProfileCard profile={profile} />
+            <ProfileCard
+              profile={profile}
+              telegramId={telegramId}
+              myRoutes={myRoutes}
+              onShowOnMap={(id) => {
+                setSelectedRouteId(id);
+                setTab("map");
+              }}
+              onPropose={doPropose}
+            />
           ) : (
             <p className="text-body text-[var(--tma-hint)]">Загрузка профиля…</p>
           )}
@@ -517,7 +685,7 @@ export default function Home() {
         <AdminDashboard telegramId={telegramId} />
       )}
 
-      {pendingClick && testerMode && (
+      {pendingClick && testerMode && !drawerMode && (
         <AddWaypointModal
           latitude={pendingClick.lat}
           longitude={pendingClick.lng}
@@ -526,6 +694,17 @@ export default function Home() {
           error={saveError}
           onClose={() => setPendingClick(null)}
           onSubmit={handleCreate}
+        />
+      )}
+
+      {pendingTrack && (
+        <TrackSaveModal
+          track={pendingTrack.track}
+          initialActivity={pendingTrack.activity}
+          saving={trackBusy}
+          error={trackError}
+          onClose={() => setPendingTrack(null)}
+          onSubmit={doSaveTrack}
         />
       )}
 

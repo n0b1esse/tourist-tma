@@ -3,10 +3,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, auth, checkins, routes, tickets, users, waypoints
+from app.api import admin, auth, checkins, routes, steps, tickets, users, waypoints
 from app.core.config import settings
 
-app = FastAPI(title="Tourist TMA API", version="0.4.0")
+app = FastAPI(title="Tourist TMA API", version="0.5.0")
 
 _cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()] or ["*"]
 app.add_middleware(
@@ -24,6 +24,7 @@ app.include_router(waypoints.router)
 app.include_router(users.router)
 app.include_router(admin.router)
 app.include_router(checkins.router)
+app.include_router(steps.router)
 app.include_router(tickets.router)
 app.include_router(tickets.admin_router)
 

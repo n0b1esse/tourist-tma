@@ -56,3 +56,32 @@ class DifficultyLevel(str, enum.Enum):
     MEDIUM = "Средний"
     HARD = "Сложный"
     EXTREME = "Экстремальный"
+
+
+class ActivityType(str, enum.Enum):
+    """Типы физической активности (Fitness-трекинг)."""
+
+    hiking = "hiking"  # 🥾 Хайкинг / Трекинг
+    walking = "walking"  # 🚶 Пешая прогулка
+    bike = "bike"  # 🚴 Велосипед / Маунтинбайк
+    run = "run"  # 🏃 Бег / Трейлраннинг
+    offroad = "offroad"  # 🚙 Off-road / Auto
+
+
+ACTIVITY_META: dict[str, dict[str, str]] = {
+    "hiking": {"emoji": "🥾", "label": "Хайкинг / Трекинг", "step_factor": "1.0"},
+    "walking": {"emoji": "🚶", "label": "Пешая прогулка", "step_factor": "1.0"},
+    "bike": {"emoji": "🚴", "label": "Велосипед / МТБ", "step_factor": "0.0"},
+    "run": {"emoji": "🏃", "label": "Бег / Трейлраннинг", "step_factor": "1.35"},
+    "offroad": {"emoji": "🚙", "label": "Off-road / Auto", "step_factor": "0.0"},
+}
+
+
+def activity_emoji(value: "ActivityType | str") -> str:
+    key = value.value if isinstance(value, ActivityType) else str(value)
+    return ACTIVITY_META.get(key, {}).get("emoji", "🥾")
+
+
+def activity_label(value: "ActivityType | str") -> str:
+    key = value.value if isinstance(value, ActivityType) else str(value)
+    return ACTIVITY_META.get(key, {}).get("label", key)

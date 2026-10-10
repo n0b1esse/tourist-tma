@@ -1,13 +1,16 @@
 /** HTTP-клиент к FastAPI (Шаг 4 + ТЗ: admin/checkins/tickets). Auth: X-Telegram-Id. */
 
 import type {
+  ActivityType,
   AdminStats,
   AdminUser,
   AppMode,
   CheckinOut,
   Profile,
   RouteItem,
+  StepsStats,
   TicketOut,
+  TrackPoint,
   UserProfile,
   UserRole,
   WaypointCreate,
@@ -59,13 +62,19 @@ export function getProfile(telegramId: number): Promise<Profile> {
 
 export function getRoutes(
   telegramId: number | null,
-  filters?: { difficulty?: string | null; max_distance_km?: number | null },
+  filters?: { difficulty?: string | null; max_distance_km?: number | null; activity_type?: ActivityType | null; status?: string | null },
 ): Promise<RouteItem[]> {
   const q = new URLSearchParams();
   if (filters?.difficulty) q.set("difficulty", filters.difficulty);
   if (filters?.max_distance_km != null) q.set("max_distance_km", String(filters.max_distance_km));
+  if (filters?.activity_type) q.set("activity_type", filters.activity_type);
+  if (filters?.status) q.set("status", filters.status);
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return req<RouteItem[]>(`/api/routes${suffix}`, telegramId);
+}
+
+export function getMyRoutes(telegramId: number): Promise<RouteItem[]> {
+  return req<RouteItem[]>("/api/routes/mine", telegramId);
 }
 
 export function getWaypoints(
@@ -116,12 +125,49 @@ export function moderateWaypoint(
 
 export function createRoute(
   telegramId: number,
-  payload: { title: string; description?: string | null; difficulty: string; distance_km: number; elevation_gain_m: number; estimated_time?: string | null; max_elevation_m?: number | null },
+  payload: { title: string; description?: string | null; activity_type?: ActivityType; difficulty: string; distance_km: number; elevation_gain_m: number; steps_count?: number; estimated_time?: string | null; max_elevation_m?: number | null; photo_url?: string | null; track_points?: TrackPoint[] },
 ): Promise<RouteItem> {
   return req<RouteItem>("/api/routes", telegramId, { method: "POST", body: JSON.stringify(payload) });
 }
 
-// --- Чек-ины (ТЗ §4Б) ---
+export interface RecordResult {
+  route: RouteItem;
+  awarded: string[];
+  calories: number;
+}
+
+export function recordTrack(
+  telegramId: number,
+  payload: { title: string; description?: string | null; activity_type: ActivityType; difficulty: string; track_points: TrackPoint[]; steps_count: number; photo_url?: string | null; estimated_time?: string | null },
+): Promise<RecordResult> {
+  return req<RecordResult>("/api/routes/record", telegramId, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function proposeRoute(telegramId: number, id: number): Promise<RouteItem> {
+  return req<RouteItem>(`/api/routes/${id}/propose`, telegramId, { method: "POST" });
+}
+
+export function moderateRoute(telegramId: number, id: number, status: "published" | "rejected"): Promise<RouteItem> {
+  return req<RouteItem>(`/api/routes/${id}/moderate`, telegramId, { method: "PATCH", body: JSON.stringify({ status }) });
+}
+
+export function importTrack(
+  telegramId: number,
+  payload: { content: string; format: "gpx" | "kml" },
+): Promise<{ points: TrackPoint[]; distance_km: number; elevation_gain_m: number; max_elevation_m: number | null }> {
+  return req("/api/routes/import", telegramId, { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function exportTrackUrl(telegramId: number, id: number, format: "gpx" | "kml" | "geojson"): Promise<string> {
+  const API_URL_INNER = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  const res = await fetch(`${API_URL_INNER}/api/routes/${id}/export?format=${format}`, {
+    headers: telegramId != null ? { "X-Telegram-Id": String(telegramId) } : {},
+  });
+  if (!res.ok) throw new Error(`Export ${res.status}`);
+  return await res.text();
+}
+
+// --- Шагомер (Fitness) ---
 export interface CheckinResult {
   checkin: CheckinOut;
   awarded: string[];
@@ -217,4 +263,25 @@ export function adminListTickets(telegramId: number): Promise<TicketOut[]> {
 
 export function adminToggleTicket(telegramId: number, id: number): Promise<TicketOut> {
   return req<TicketOut>(`/api/admin/tickets/${id}`, telegramId, { method: "PATCH" });
+}
+
+// --- Шагомер: логи и статистика ---
+export interface StepLogResult {
+  log: { log_date: string; steps: number; distance_km: number; calories: number };
+  awarded: string[];
+  total_steps: number;
+}
+
+export function logSteps(
+  telegramId: number,
+  payload: { steps: number; distance_km?: number; calories?: number },
+): Promise<StepLogResult> {
+  return req<StepLogResult>("/api/steps/log", telegramId, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getStepsStats(telegramId: number, range: "today" | "week" | "month" = "week"): Promise<StepsStats> {
+  return req<StepsStats>(`/api/steps/stats?range=${range}`, telegramId);
 }

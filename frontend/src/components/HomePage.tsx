@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from "react";
 
-import type { RouteItem, WaypointItem } from "@/types";
+import type { ActivityType, RouteItem, WaypointItem } from "@/types";
+import { ACTIVITY_META } from "@/types";
 import { distanceM } from "@/utils/telegram";
+import PedometerWidget from "./PedometerWidget";
 import RouteCard from "./RouteCard";
 
 const BANNERS = [
@@ -29,20 +31,23 @@ const BANNERS = [
 
 const DIFFS = ["Все", "Легкий", "Средний", "Сложный", "Экстремальный"] as const;
 
-/** Главная: промо-баннеры + ближайшие хайки с фильтрами (ТЗ §4А). */
+/** Главная: промо-баннеры + шагомер + ближайшие хайки с фильтрами (ТЗ §4А + Fitness). */
 export default function HomePage({
   routes,
   waypoints,
   userLocation,
+  telegramId,
   onShowOnMap,
 }: {
   routes: RouteItem[];
   waypoints: WaypointItem[];
   userLocation: { lat: number; lon: number; granted: boolean } | null;
+  telegramId: number | null;
   onShowOnMap: (id: number) => void;
 }) {
   const [banner, setBanner] = useState(0);
   const [diff, setDiff] = useState<(typeof DIFFS)[number]>("Все");
+  const [activity, setActivity] = useState<"Все" | ActivityType>("Все");
   const [maxDist, setMaxDist] = useState<string>("all");
   const [sort, setSort] = useState<"near" | "rating" | "distance">("near");
 
@@ -64,6 +69,7 @@ export default function HomePage({
   const filtered = useMemo(() => {
     let list = enriched;
     if (diff !== "Все") list = list.filter(({ r }) => r.difficulty === diff);
+    if (activity !== "Все") list = list.filter(({ r }) => r.activity_type === activity);
     if (maxDist !== "all") {
       const km = Number(maxDist);
       list = list.filter(({ r }) => r.distance_km <= km);
@@ -73,7 +79,7 @@ export default function HomePage({
     if (sort === "distance") sorted.sort((a, b) => a.r.distance_km - b.r.distance_km);
     if (sort === "rating") sorted.sort((a, b) => (b.r.rating ?? 0) - (a.r.rating ?? 0));
     return sorted;
-  }, [enriched, diff, maxDist, sort]);
+  }, [enriched, diff, activity, maxDist, sort]);
 
   const b = BANNERS[banner % BANNERS.length];
 
@@ -96,9 +102,25 @@ export default function HomePage({
         </div>
       </div>
 
+      {/* Шагомер-компакт */}
+      <PedometerWidget telegramId={telegramId} compact />
+
       {/* Фильтры */}
       <div className="space-y-2">
         <div className="text-h2">🥾 Ближайшие хайки</div>
+        <div className="flex flex-wrap gap-1.5">
+          {(Object.keys(ACTIVITY_META) as ActivityType[]).map((a) => (
+            <button
+              key={a}
+              onClick={() => setActivity(activity === a ? "Все" : a)}
+              className={`rounded-full px-2.5 py-1 text-caption font-semibold ${
+                activity === a ? "bg-primary text-white" : "bg-[var(--tma-secondary-bg)] text-[var(--tma-hint)]"
+              }`}
+            >
+              {ACTIVITY_META[a].emoji} {ACTIVITY_META[a].label}
+            </button>
+          ))}
+        </div>
         {!userLocation?.granted && (
           <p className="text-caption text-[var(--tma-hint)]">
             GPS недоступен — показываем все маршруты. Разреши геолокацию для сортировки по близости.

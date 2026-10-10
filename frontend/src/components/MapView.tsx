@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-import type { RouteItem, WaypointItem } from "@/types";
+import type { RouteItem, TrackPoint, WaypointItem } from "@/types";
 import { tokens } from "@/styles/tokens";
 import { parseWktLines } from "@/utils/wkt";
 
@@ -25,6 +25,9 @@ export default function MapView({
   userLocation,
   onMapClick,
   onWaypointSelect,
+  liveTrack,
+  draftPoints,
+  drawerMode,
 }: {
   routes: RouteItem[];
   waypoints: WaypointItem[];
@@ -33,6 +36,9 @@ export default function MapView({
   userLocation: { lat: number; lon: number; granted: boolean } | null;
   onMapClick: (lat: number, lng: number) => void;
   onWaypointSelect?: (w: WaypointItem) => void;
+  liveTrack?: TrackPoint[] | null;
+  draftPoints?: TrackPoint[] | null;
+  drawerMode?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -72,14 +78,14 @@ export default function MapView({
     }
   }, [userLocation]);
 
-  // Клик в tester-режиме
+  // Клик в tester-режиме + режиме конструктора
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const handler = (e: L.LeafletMouseEvent) => {
       clickRef.current(e.latlng.lat, e.latlng.lng);
     };
-    if (testerMode) {
+    if (testerMode || drawerMode) {
       map.on("click", handler);
       map.getContainer().style.cursor = "crosshair";
     }
@@ -87,7 +93,7 @@ export default function MapView({
       map.off("click", handler);
       map.getContainer().style.cursor = "";
     };
-  }, [testerMode]);
+  }, [testerMode, drawerMode]);
 
   // Перерисовка слоёв при изменении данных
   useEffect(() => {
@@ -141,6 +147,26 @@ export default function MapView({
       marker.addTo(overlay);
     }
 
+    // Живой GPS-трек (красная линия) + конструктор (пунктир)
+    if (liveTrack && liveTrack.length >= 2) {
+      const line = liveTrack.map((p) => [p.lat, p.lon] as [number, number]);
+      L.polyline(line, { color: "#E63946", weight: 5, opacity: 0.95 })
+        .bindTooltip("⏺ Запись трека")
+        .addTo(overlay);
+      allBounds.push(...line);
+    }
+    if (draftPoints && draftPoints.length >= 2) {
+      const line = draftPoints.map((p) => [p.lat, p.lon] as [number, number]);
+      L.polyline(line, { color: "#9D0208", weight: 4, opacity: 0.9, dashArray: "8 6" })
+        .bindTooltip("✏️ Черновик конструктора")
+        .addTo(overlay);
+    }
+    if (draftPoints && draftPoints.length > 0) {
+      for (const p of draftPoints) {
+        L.circleMarker([p.lat, p.lon], { radius: 4, color: "#9D0208", fillOpacity: 1 }).addTo(overlay);
+      }
+    }
+
     // Первичный фит по всем данным (если GPS нет); дальше — только по выбору маршрута
     if (!fittedRef.current && allBounds.length > 0 && !userLocation?.granted) {
       map.fitBounds(L.latLngBounds(allBounds), { padding: [24, 24] });
@@ -148,7 +174,7 @@ export default function MapView({
     } else if (userLocation?.granted && !fittedRef.current && allBounds.length === 0) {
       fittedRef.current = true;
     }
-  }, [routes, waypoints, selectedRouteId, userLocation]);
+  }, [routes, waypoints, selectedRouteId, userLocation, liveTrack, draftPoints]);
 
   // Маркер пользователя
   useEffect(() => {

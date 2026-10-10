@@ -35,7 +35,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 async def _maybe_award(user: User, db: AsyncSession) -> list[str]:
-    """Простые правила бейджей ТЗ §4В: Первый хайк / Покоритель 3000м / Легенда Бишкека."""
+    """Бейджи ТЗ §4В + Fitness: хайки, высота, шаги, марафон."""
     awarded: list[str] = []
     total_checkins = (
         await db.execute(select(func.count()).select_from(Checkin).where(Checkin.telegram_id == user.telegram_id))
@@ -45,6 +45,12 @@ async def _maybe_award(user: User, db: AsyncSession) -> list[str]:
         ("first_hike", "Первый хайк", total_checkins >= 1),
         ("conqueror_3000", "Покоритель 3000м", (user.total_elevation_m or 0) >= 3000),
         ("bishkek_legend", "Легенда Бишкека", total_checkins >= 10),
+        # Fitness-бейджи (шаги и дистанция)
+        ("first_10k_steps", "Первые 10 000 шагов", (user.total_steps or 0) >= 10000),
+        ("marathon_50k", "Марафонец (50 км)", (user.total_distance_km or 0) >= 50),
+        ("trail_conqueror", "Покоритель троп", (user.total_hikes or 0) >= 5),
+        ("early_bird_50k_steps", "Шагомер PRO", (user.total_steps or 0) >= 50000),
+        ("calorie_burner", "Сжигатель калорий", (user.total_calories or 0) >= 2000),
     ]
     for code, title, ok in rules:
         if not ok:

@@ -27,3 +27,6 @@ class UserProfile(BaseModel):
     is_blocked: bool = False
     total_distance_km: float = 0.0
     total_elevation_m: int = 0
+    total_steps: int = 0
+    total_calories: float = 0.0
+    total_hikes: int = 0

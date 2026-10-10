@@ -9,6 +9,7 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.achievement import Achievement, UserAchievement
 from app.models.checkin import Checkin
+from app.models.route import Route
 from app.models.user import User
 from app.schemas.auth import UserProfile
 
@@ -25,6 +26,7 @@ class ProfileOut(UserProfile):
     achievements: list[AchievementOut] = []
     checkins_count: int = 0
     visited_locations: int = 0
+    my_routes_count: int = 0
 
 
 @router.get("/profile", response_model=ProfileOut)
@@ -51,6 +53,11 @@ async def my_profile(
             )
         )
     ).scalar() or 0
+    my_routes_count = (
+        await db.execute(
+            select(func.count()).select_from(Route).where(Route.author_id == user.telegram_id)
+        )
+    ).scalar() or 0
     return ProfileOut(
         telegram_id=user.telegram_id,
         username=user.username,
@@ -59,10 +66,14 @@ async def my_profile(
         is_blocked=bool(getattr(user, "is_blocked", False)),
         total_distance_km=user.total_distance_km,
         total_elevation_m=user.total_elevation_m,
+        total_steps=int(getattr(user, "total_steps", 0) or 0),
+        total_calories=float(getattr(user, "total_calories", 0.0) or 0.0),
+        total_hikes=int(getattr(user, "total_hikes", 0) or 0),
         achievements=[
             AchievementOut(code_name=a.code_name, title=a.title, description=a.description)
             for a in achs
         ],
         checkins_count=checkins_count,
         visited_locations=visited_locations,
+        my_routes_count=my_routes_count,
     )

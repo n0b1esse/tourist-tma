@@ -25,6 +25,10 @@ class User(Base):
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     total_distance_km: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     total_elevation_m: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Fitness-трекинг: суммарные шаги, калории, число хайков
+    total_steps: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+    total_calories: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0.0")
+    total_hikes: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )

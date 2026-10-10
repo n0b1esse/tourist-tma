@@ -5,6 +5,7 @@ import type { Tab, UserRole } from "@/types";
 const baseTabs: { id: Tab; label: string; icon: string }[] = [
   { id: "home", label: "Главное", icon: "🏠" },
   { id: "map", label: "Карта", icon: "🗺" },
+  { id: "track", label: "Запись", icon: "⏺" },
   { id: "routes", label: "Маршруты", icon: "🥾" },
   { id: "profile", label: "Профиль", icon: "👤" },
 ];
