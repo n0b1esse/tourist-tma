@@ -16,6 +16,6 @@ COPY . .
 
 EXPOSE 8000
 
-# Прод-CMD: слушает $PORT от Render (по умолчанию 8000 локально).
+# Прод-CMD: миграции + uvicorn, слушает $PORT от Render (по умолчанию 8000 локально).
 # Для локальной разработки docker-compose переопределяет на --reload (см. compose).
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
