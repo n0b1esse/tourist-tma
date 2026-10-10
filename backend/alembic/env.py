@@ -12,8 +12,8 @@ from app.core.config import settings
 from app.core.database import Base
 
 config = context.config
-# Подменяем URL из настроек (asyncpg). Для оффлайна — sync-вариант.
-SYNC_URL = settings.DATABASE_URL.replace("+asyncpg", "+psycopg2")
+# Подменяем URL из настроек (asyncpg). Для оффлайна — sync-вариант (psycopg v3).
+SYNC_URL = settings.DATABASE_URL.replace("+asyncpg", "+psycopg")
 
 target_metadata = Base.metadata
 
