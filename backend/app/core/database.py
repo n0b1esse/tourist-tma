@@ -5,7 +5,10 @@
 не дружит с кешем asyncpg).
 
 Важно: у драйверов разные имена SSL-параметра:
-- asyncpg (рантайм, ``postgresql+asyncpg://``) понимает ``ssl`` (bool/SSLContext);
+- asyncpg (рантайм, ``postgresql+asyncpg://``) понимает ``ssl`` (строка/bool/SSLContext);
+  для Supabase нужен ``ssl="require"`` — только TLS без проверки цепочки
+  (у пулера Supavisor самоподписанный сертификат, ``ssl=True`` падает с
+  ``CERTIFICATE_VERIFY_FAILED``); это аналог libpq ``sslmode=require``;
 - psycopg v3 / psycopg2 (libpq, в т.ч. SYNC_URL для alembic offline) понимает
   ТОЛЬКО ``sslmode`` — ключ ``ssl`` падает с
   ``psycopg.ProgrammingError: invalid connection option "ssl"``.
@@ -42,9 +45,10 @@ def build_connect_args(url: str) -> dict[str, Any]:
     if "+psycopg" in url:
         # libpq-драйверы: только sslmode; ключ "ssl" здесь запрещён.
         return {"sslmode": "require"}
-    # asyncpg (основной рантайм): ssl=True (bool, не строка),
+    # asyncpg (основной рантайм): ssl="require" — шифровать, но не проверять
+    # цепочку (пулер Supabase отдаёт самоподписанный сертификат).
     # statement_cache_size=0 — для Supavisor в transaction mode.
-    return {"ssl": True, "statement_cache_size": 0}
+    return {"ssl": "require", "statement_cache_size": 0}
 
 
 ASYNC_SCHEME = "postgresql+asyncpg"

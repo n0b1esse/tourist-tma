@@ -36,7 +36,8 @@ DATABASE_URL=postgresql+asyncpg://postgres.<ref>:<pass>@aws-0-eu-central-1.poole
 
 Код сам включает TLS и `statement_cache_size=0` для хостов
 `*.supabase.co` / `pooler.supabase.com` (см. `build_connect_args` в
-`backend/app/core/database.py`): для `postgresql+asyncpg://` это `ssl=True`,
+`backend/app/core/database.py`): для `postgresql+asyncpg://` это `ssl="require"`
+(только TLS без проверки цепочки — у пулера самоподписанный сертификат),
 для `postgresql+psycopg://` (alembic offline) — `sslmode=require`.
 Вручную `?ssl=` дописывать не нужно — этот legacy-параметр вырезается
 из URL автоматически, т.к. psycopg падает на нём с
