@@ -1,32 +1,41 @@
 services:
+  # 1. Веб-сервер (API + Mini App бэкенд) с автомиграциями
   - type: web
-    name: tourist-tma-backend
-    runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    name: tourist-kg-backend
+    env: python
+    region: frankfurt
     plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
         sync: false
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: tourist-tma-redis
-          property: connectionString
       - key: TELEGRAM_BOT_TOKEN
         sync: false
-      - key: ADMIN_TELEGRAM_ID
-        sync: false
       - key: MINI_APP_URL
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
         sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://tourist-tma.vercel.app
+        sync: false
 
-  - type: keyvalue
-    name: tourist-tma-redis
+  # 2. Фоновый воркер для Telegram-бота
+  - type: worker
+    name: tourist-kg-bot
+    env: python
+    region: frankfurt
     plan: free
-    ipAllowList:
-      - source: 0.0.0.0/0
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.bot
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: MINI_APP_URL
+        sync: false
