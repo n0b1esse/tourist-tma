@@ -49,7 +49,8 @@ def upgrade() -> None:
         sa.Column("full_name", sa.String(255)),
         sa.Column(
             "role",
-            sa.Enum("user", "tester", "admin", name="user_role", native_enum=True),
+            # create_type=False: тип уже создан DO-блоком выше, иначе дубль CREATE TYPE
+            sa.Enum("user", "tester", "admin", name="user_role", native_enum=True, create_type=False),
             server_default="user",
             nullable=False,
         ),
@@ -65,7 +66,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text),
         sa.Column(
             "difficulty",
-            sa.Enum("Легкий", "Средний", "Сложный", name="difficulty_level", native_enum=True),
+            sa.Enum("Легкий", "Средний", "Сложный", name="difficulty_level", native_enum=True, create_type=False),
             server_default="Средний",
             nullable=False,
         ),
@@ -84,7 +85,7 @@ def upgrade() -> None:
         sa.Column("created_by", sa.BigInteger, sa.ForeignKey("users.telegram_id", ondelete="SET NULL")),
         sa.Column(
             "type",
-            sa.Enum("water", "camp", "hazard", "viewpoint", "rest", name="waypoint_type", native_enum=True),
+            sa.Enum("water", "camp", "hazard", "viewpoint", "rest", name="waypoint_type", native_enum=True, create_type=False),
             nullable=False,
         ),
         sa.Column("coordinates", geoalchemy2.Geometry("POINT", srid=4326), nullable=False),
@@ -93,7 +94,7 @@ def upgrade() -> None:
         sa.Column("photo_url", sa.Text),
         sa.Column(
             "status",
-            sa.Enum("draft", "review", "published", "rejected", name="content_status", native_enum=True),
+            sa.Enum("draft", "review", "published", "rejected", name="content_status", native_enum=True, create_type=False),
             server_default="draft",
             nullable=False,
         ),
