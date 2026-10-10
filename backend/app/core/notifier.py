@@ -36,26 +36,78 @@ def build_draft_message(wp: Waypoint, author: User, lat: float, lon: float) -> s
     )
 
 
-async def notify_admin_draft(wp: Waypoint, author: User, lat: float, lon: float) -> bool:
-    """Отправить уведомление супер-админу. Возвращает True при успехе."""
+async def _send(chat_id: int, text: str) -> bool:
     token = settings.TELEGRAM_BOT_TOKEN
-    admin_id = settings.ADMIN_TELEGRAM_ID
-    if not token or not admin_id:
-        log.debug("notifier: BOT_TOKEN/ADMIN_ID не заданы — пропуск")
+    if not token:
+        log.debug("notifier: BOT_TOKEN не задан — пропуск")
         return False
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={
-                    "chat_id": admin_id,
-                    "text": build_draft_message(wp, author, lat, lon),
-                    "parse_mode": "HTML",
-                },
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
             )
             resp.raise_for_status()
-        log.info("notifier: черновик #%s отправлен админу %s", wp.id, admin_id)
         return True
     except Exception as exc:  # noqa: BLE001 — best-effort по дизайну
-        log.warning("notifier: не удалось отправить черновик #%s: %s", wp.id, exc)
+        log.warning("notifier: send to %s failed: %s", chat_id, exc)
         return False
+
+
+async def notify_admin_draft(wp: Waypoint, author: User, lat: float, lon: float) -> bool:
+    """Отправить уведомление супер-админу. Возвращает True при успехе."""
+    admin_id = settings.ADMIN_TELEGRAM_ID
+    if not admin_id:
+        log.debug("notifier: ADMIN_ID не задан — пропуск")
+        return False
+    ok = await _send(admin_id, build_draft_message(wp, author, lat, lon))
+    if ok:
+        log.info("notifier: черновик #%s отправлен админу %s", wp.id, admin_id)
+    return ok
+
+
+async def notify_badge(telegram_id: int, badge_title: str) -> bool:
+    """Пуш о новом бейдже за чек-ин (ТЗ §5Б)."""
+    safe = html.escape(badge_title)
+    return await _send(telegram_id, f"🏅 <b>Новый бейдж!</b>\nТы получил(а): <b>{safe}</b>")
+
+
+async def notify_ticket(author: User, kind: str, subject: str | None, message: str) -> bool:
+    """Тикет/фидбек супер-админу (ТЗ §2, §5А)."""
+    admin_id = settings.ADMIN_TELEGRAM_ID
+    if not admin_id:
+        return False
+    label = "🐞 Баг-репорт" if kind == "bug" else "🆘 Обратная связь"
+    name = html.escape(author.full_name or author.username or str(author.telegram_id))
+    subj = html.escape(subject or "—")
+    body = html.escape(message[:1000])
+    return await _send(
+        admin_id,
+        f"{label}\nОт: {name} (id <code>{author.telegram_id}</code>)\n"
+        f"Тема: {subj}\n{body}",
+    )
+
+
+async def notify_moderation(telegram_id: int | None, title: str, verdict: str) -> bool:
+    """Уведомление гиду/админу о статусе модерации маршрута (ТЗ §5Б)."""
+    if not telegram_id:
+        return False
+    safe = html.escape(title or "—")
+    emoji = "✅" if verdict == "published" else "❌"
+    return await _send(
+        telegram_id,
+        f"{emoji} <b>Модерация маршрута</b>\n«{safe}» — статус: <b>{html.escape(verdict)}</b>",
+    )
+
+
+async def broadcast_message(chat_ids: list[int], text: str) -> tuple[int, int]:
+    """Сервисная рассылка супер-админа (ТЗ §3). Возвращает (sent, failed)."""
+    safe = text[:4000]
+    sent = failed = 0
+    for cid in chat_ids:
+        ok = await _send(cid, html.escape(safe))
+        if ok:
+            sent += 1
+        else:
+            failed += 1
+    return sent, failed

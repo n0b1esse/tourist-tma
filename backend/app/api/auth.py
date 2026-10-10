@@ -55,6 +55,7 @@ async def auth_init_data(body: InitDataRequest, db: AsyncSession = Depends(get_d
         username=user.username,
         full_name=user.full_name,
         role=user.role,
+        is_blocked=bool(getattr(user, "is_blocked", False)),
         total_distance_km=user.total_distance_km,
         total_elevation_m=user.total_elevation_m,
     )
@@ -100,6 +101,7 @@ async def auth_dev_login(body: DevLoginRequest, db: AsyncSession = Depends(get_d
         username=user.username,
         full_name=user.full_name,
         role=user.role,
+        is_blocked=bool(getattr(user, "is_blocked", False)),
         total_distance_km=user.total_distance_km,
         total_elevation_m=user.total_elevation_m,
     )

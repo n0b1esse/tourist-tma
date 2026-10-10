@@ -6,7 +6,7 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- Перечисления (идемпотентно, чтобы повторный запуск не падал)
 DO $$ BEGIN
-  CREATE TYPE user_role AS ENUM ('user', 'tester', 'admin');
+  CREATE TYPE user_role AS ENUM ('user', 'tester', 'admin', 'super_admin');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
@@ -16,12 +16,13 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-  CREATE TYPE waypoint_type AS ENUM ('water', 'camp', 'hazard', 'viewpoint', 'rest');
+  CREATE TYPE waypoint_type AS ENUM ('water', 'camp', 'hazard', 'viewpoint', 'rest',
+    'waterfall', 'lake', 'peak', 'camping', 'spring', 'recreation');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 DO $$ BEGIN
-  CREATE TYPE difficulty_level AS ENUM ('Легкий', 'Средний', 'Сложный');
+  CREATE TYPE difficulty_level AS ENUM ('Легкий', 'Средний', 'Сложный', 'Экстремальный');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS users (
   username VARCHAR(255),
   full_name VARCHAR(255),
   role user_role DEFAULT 'user' NOT NULL,
+  is_blocked BOOLEAN DEFAULT FALSE NOT NULL,
   total_distance_km FLOAT DEFAULT 0.0 NOT NULL,
   total_elevation_m INT DEFAULT 0 NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -84,6 +86,31 @@ CREATE TABLE IF NOT EXISTS user_achievements (
   unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
   UNIQUE (telegram_id, achievement_id)
 );
+
+-- Чек-ины (быстрый чек-ин в радиусе локации, ТЗ §4Б) — после routes/waypoints из-за FK
+CREATE TABLE IF NOT EXISTS checkins (
+  id SERIAL PRIMARY KEY,
+  telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE CASCADE NOT NULL,
+  waypoint_id INT REFERENCES waypoints(id) ON DELETE SET NULL,
+  route_id INT REFERENCES routes(id) ON DELETE SET NULL,
+  latitude FLOAT,
+  longitude FLOAT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_checkins_telegram ON checkins (telegram_id);
+CREATE INDEX IF NOT EXISTS idx_checkins_waypoint ON checkins (waypoint_id);
+
+-- Тикеты: feedback (поддержка) / bug (баг-репорт тестера супер-админу)
+CREATE TABLE IF NOT EXISTS tickets (
+  id SERIAL PRIMARY KEY,
+  telegram_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+  kind VARCHAR(20) DEFAULT 'feedback' NOT NULL,
+  subject VARCHAR(255),
+  message TEXT NOT NULL,
+  status VARCHAR(20) DEFAULT 'open' NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status);
 
 -- Индексы для геозапросов и фильтрации по режимам production/tester
 CREATE INDEX IF NOT EXISTS idx_routes_gpx_data ON routes USING GIST (gpx_data);

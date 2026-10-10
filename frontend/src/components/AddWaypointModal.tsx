@@ -5,7 +5,10 @@ import { useState } from "react";
 import type { RouteItem, WaypointCreate, WaypointType } from "@/types";
 import { tokens } from "@/styles/tokens";
 
-const TYPES: WaypointType[] = ["water", "camp", "hazard", "viewpoint", "rest"];
+const TYPES: WaypointType[] = [
+  "waterfall", "lake", "peak", "camping", "spring", "recreation",
+  "water", "camp", "hazard", "viewpoint", "rest",
+];
 
 /** Модалка создания точки тестером: клик по карте -> тип + данные -> POST (Шаг 5). */
 export default function AddWaypointModal({

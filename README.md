@@ -55,8 +55,31 @@ python tests/test_step3_smoke.py   # API smoke 6/6 без базы
 
 - `POST /api/auth/init-data` — вход по подписи Telegram WebApp
 - `POST /api/auth/dev-login` — локальный вход без подписи (кнопка «Войти локально», только при `DEV_LOGIN_ENABLED=true`, в проде выключен)
-- `GET /api/routes`, `GET /api/routes/{id}` — маршруты + GPX
-- `GET /api/waypoints?mode=production|tester` — точки (tester — только tester/admin)
+- `GET /api/routes?difficulty=&max_distance_km=` — маршруты + GPX (фильтры ТЗ §4А)
+- `POST /api/routes`, `PATCH /api/routes/{id}`, `DELETE /api/routes/{id}` — CRUD гида/админа
+- `GET /api/waypoints?mode=production|tester` — точки (tester — tester/admin/super_admin)
 - `POST /api/waypoints` — черновик от тестера (+ уведомление супер-админу)
+- `PATCH /api/waypoints/{id}` / `DELETE /api/waypoints/{id}` — правки меток на карте (админка)
 - `PATCH /api/waypoints/{id}/moderate` — модерация админа
+- `POST /api/checkins`, `GET /api/checkins/my` — быстрый чек-ин в радиусе 300 м + автобейджи
+- `POST /api/tickets/feedback`, `POST /api/tickets/bug` — поддержка / баг-репорты супер-админу
 - `GET /api/users/profile` — статистика и достижения
+- `GET /api/admin/users`, `PATCH /api/admin/users/{id}/role|status` — супер-админ: роли и блокировки
+- `GET /api/admin/stats`, `POST /api/admin/notifications` — статистика и рассылки
+- `GET /api/admin/tickets` — тикеты супер-админу
+
+## Роли и Telegram-бот
+
+Иерархия: `user` → `tester` → `admin` → `super_admin`. Блок: `is_blocked` (403 на записи).
+Супер-админа назначать SQL: `UPDATE users SET role='super_admin' WHERE telegram_id=<ID>`.
+
+Бот (`backend/app/bot.py`, aiogram): `/start` + инлайн-кнопки (Mini App, топ-5, профиль,
+поддержка), Menu Button «Открыть карту» (`MINI_APP_URL`), пуши о бейджах/рассылках/модерации.
+Запуск: `python -m app.bot` при заданных `TELEGRAM_BOT_TOKEN`, `MINI_APP_URL`.
+
+## Mini App (ТЗ)
+
+- Старт: запрос GPS → центр на пользователе; отказ → Бишкек 42.8746, 74.5698.
+- Вкладки: Главное (баннеры + фильтры хайков) · Карта (чек-ин в радиусе) · Маршруты ·
+  Профиль (бейджи/статистика/темы) · Админка (только super_admin).
+- Онбординг-тур при первом входе, тёмная/светлая тема из Telegram.

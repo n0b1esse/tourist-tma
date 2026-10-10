@@ -1,10 +1,15 @@
-/** HTTP-клиент к FastAPI (Шаг 4). Auth Шага 3: заголовок X-Telegram-Id. */
+/** HTTP-клиент к FastAPI (Шаг 4 + ТЗ: admin/checkins/tickets). Auth: X-Telegram-Id. */
 
 import type {
+  AdminStats,
+  AdminUser,
   AppMode,
+  CheckinOut,
   Profile,
   RouteItem,
+  TicketOut,
   UserProfile,
+  UserRole,
   WaypointCreate,
   WaypointItem,
 } from "@/types";
@@ -28,7 +33,9 @@ async function req<T>(
     const detail = await res.text();
     throw new Error(`API ${res.status} ${path}: ${detail}`);
   }
-  return (await res.json()) as T;
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 export function authInitData(initData: string): Promise<UserProfile> {
@@ -50,8 +57,15 @@ export function getProfile(telegramId: number): Promise<Profile> {
   return req<Profile>("/api/users/profile", telegramId);
 }
 
-export function getRoutes(telegramId: number | null): Promise<RouteItem[]> {
-  return req<RouteItem[]>("/api/routes", telegramId);
+export function getRoutes(
+  telegramId: number | null,
+  filters?: { difficulty?: string | null; max_distance_km?: number | null },
+): Promise<RouteItem[]> {
+  const q = new URLSearchParams();
+  if (filters?.difficulty) q.set("difficulty", filters.difficulty);
+  if (filters?.max_distance_km != null) q.set("max_distance_km", String(filters.max_distance_km));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return req<RouteItem[]>(`/api/routes${suffix}`, telegramId);
 }
 
 export function getWaypoints(
@@ -72,4 +86,135 @@ export function createWaypoint(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function updateWaypoint(
+  telegramId: number,
+  id: number,
+  payload: Partial<WaypointCreate> & { title?: string | null; description?: string | null },
+): Promise<WaypointItem> {
+  return req<WaypointItem>(`/api/waypoints/${id}`, telegramId, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteWaypoint(telegramId: number, id: number): Promise<void> {
+  return req<void>(`/api/waypoints/${id}`, telegramId, { method: "DELETE" });
+}
+
+export function moderateWaypoint(
+  telegramId: number,
+  id: number,
+  status: "published" | "rejected",
+): Promise<WaypointItem> {
+  return req<WaypointItem>(`/api/waypoints/${id}/moderate`, telegramId, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function createRoute(
+  telegramId: number,
+  payload: { title: string; description?: string | null; difficulty: string; distance_km: number; elevation_gain_m: number; estimated_time?: string | null; max_elevation_m?: number | null },
+): Promise<RouteItem> {
+  return req<RouteItem>("/api/routes", telegramId, { method: "POST", body: JSON.stringify(payload) });
+}
+
+// --- Чек-ины (ТЗ §4Б) ---
+export interface CheckinResult {
+  checkin: CheckinOut;
+  awarded: string[];
+}
+
+export function createCheckin(
+  telegramId: number,
+  payload: { waypoint_id?: number | null; route_id?: number | null; latitude?: number | null; longitude?: number | null },
+): Promise<CheckinResult> {
+  return req<CheckinResult>("/api/checkins", telegramId, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function myCheckins(telegramId: number): Promise<CheckinOut[]> {
+  return req<CheckinOut[]>("/api/checkins/my", telegramId);
+}
+
+// --- Тикеты / поддержка (ТЗ §2, §5А) ---
+export function sendFeedback(
+  telegramId: number,
+  payload: { subject?: string | null; message: string },
+): Promise<TicketOut> {
+  return req<TicketOut>("/api/tickets/feedback", telegramId, {
+    method: "POST",
+    body: JSON.stringify({ kind: "feedback", ...payload }),
+  });
+}
+
+export function sendBugReport(
+  telegramId: number,
+  payload: { subject?: string | null; message: string },
+): Promise<TicketOut> {
+  return req<TicketOut>("/api/tickets/bug", telegramId, {
+    method: "POST",
+    body: JSON.stringify({ kind: "bug", ...payload }),
+  });
+}
+
+// --- Админка (ТЗ §3, только super_admin) ---
+export interface AdminUserList {
+  items: AdminUser[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export function adminListUsers(
+  telegramId: number,
+  params: { page?: number; page_size?: number; role?: string | null; q?: string | null },
+): Promise<AdminUserList> {
+  const q = new URLSearchParams();
+  if (params.page) q.set("page", String(params.page));
+  if (params.page_size) q.set("page_size", String(params.page_size));
+  if (params.role) q.set("role", params.role);
+  if (params.q) q.set("q", params.q);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return req<AdminUserList>(`/api/admin/users${suffix}`, telegramId);
+}
+
+export function adminSetRole(telegramId: number, targetId: number, role: UserRole): Promise<AdminUser> {
+  return req<AdminUser>(`/api/admin/users/${targetId}/role`, telegramId, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function adminSetBlocked(telegramId: number, targetId: number, is_blocked: boolean): Promise<AdminUser> {
+  return req<AdminUser>(`/api/admin/users/${targetId}/status`, telegramId, {
+    method: "PATCH",
+    body: JSON.stringify({ is_blocked }),
+  });
+}
+
+export function adminStats(telegramId: number): Promise<AdminStats> {
+  return req<AdminStats>("/api/admin/stats", telegramId);
+}
+
+export function adminNotify(
+  telegramId: number,
+  payload: { text: string; role_filter?: UserRole | null },
+): Promise<{ total: number; sent: number; failed: number }> {
+  return req(`/api/admin/notifications`, telegramId, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function adminListTickets(telegramId: number): Promise<TicketOut[]> {
+  return req<TicketOut[]>("/api/admin/tickets", telegramId);
+}
+
+export function adminToggleTicket(telegramId: number, id: number): Promise<TicketOut> {
+  return req<TicketOut>(`/api/admin/tickets/${id}`, telegramId, { method: "PATCH" });
 }

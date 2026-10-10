@@ -24,5 +24,6 @@ class UserProfile(BaseModel):
     username: str | None = None
     full_name: str | None = None
     role: UserRole
+    is_blocked: bool = False
     total_distance_km: float = 0.0
     total_elevation_m: int = 0

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, func
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,8 @@ class User(Base):
         default=UserRole.user,
         nullable=False,
     )
+    # Блокировка супер-админом (ТЗ §3): заблокированный не может писать/чекиниться
+    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     total_distance_km: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     total_elevation_m: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

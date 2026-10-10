@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Дизайн-токены (§6): бренд-цвета фиксированы, фон/текст — из Telegram-темы */
+/* Дизайн-токены (§6 + ТЗ §4В): бренд-цвета фиксированы, фон/текст — из Telegram-темы */
 :root {
   --tma-primary: #2d6a4f;
   --tma-accent: #e07a5f;
@@ -12,6 +12,16 @@
   --tma-text: var(--tg-theme-text-color, #111111);
   --tma-secondary-bg: var(--tg-theme-secondary-bg-color, #f1f1f1);
   --tma-hint: var(--tg-theme-hint-color, #999999);
+  color-scheme: light;
+}
+
+/* Тёмная тема Telegram: подстраховка, если tg-theme vars не прокинуты */
+.tma-dark {
+  --tma-bg: var(--tg-theme-bg-color, #17212b);
+  --tma-text: var(--tg-theme-text-color, #ffffff);
+  --tma-secondary-bg: var(--tg-theme-secondary-bg-color, #232e3c);
+  --tma-hint: var(--tg-theme-hint-color, #7f91a4);
+  color-scheme: dark;
 }
 
 html,
@@ -48,4 +58,28 @@ body {
 }
 .tma-marker-rejected {
   background: #9e9e9e;
+}
+
+/* Маркер пользователя (геолокация, ТЗ §1) */
+.tma-user-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9999px;
+  border: 3px solid #2d6a4f;
+  background: #ffffff;
+  box-shadow: 0 0 0 6px rgba(45, 106, 79, 0.25), 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* Пульс кнопки чек-ина */
+@keyframes tma-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+.tma-checkin-btn {
+  animation: tma-pulse 1.6s ease-in-out infinite;
 }

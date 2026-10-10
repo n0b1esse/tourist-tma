@@ -1,13 +1,14 @@
-"""GET /api/users/profile — статистика + достижения (Шаг 3.3)."""
+"""GET /api/users/profile — статистика + достижения (Шаг 3.3 + ТЗ §4В)."""
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.achievement import Achievement, UserAchievement
+from app.models.checkin import Checkin
 from app.models.user import User
 from app.schemas.auth import UserProfile
 
@@ -22,6 +23,8 @@ class AchievementOut(BaseModel):
 
 class ProfileOut(UserProfile):
     achievements: list[AchievementOut] = []
+    checkins_count: int = 0
+    visited_locations: int = 0
 
 
 @router.get("/profile", response_model=ProfileOut)
@@ -36,15 +39,30 @@ async def my_profile(
         .order_by(Achievement.id)
     )
     achs = (await db.execute(stmt)).scalars().all()
+    checkins_count = (
+        await db.execute(
+            select(func.count()).select_from(Checkin).where(Checkin.telegram_id == user.telegram_id)
+        )
+    ).scalar() or 0
+    visited_locations = (
+        await db.execute(
+            select(func.count(func.distinct(Checkin.waypoint_id))).where(
+                Checkin.telegram_id == user.telegram_id, Checkin.waypoint_id.is_not(None)
+            )
+        )
+    ).scalar() or 0
     return ProfileOut(
         telegram_id=user.telegram_id,
         username=user.username,
         full_name=user.full_name,
         role=user.role,
+        is_blocked=bool(getattr(user, "is_blocked", False)),
         total_distance_km=user.total_distance_km,
         total_elevation_m=user.total_elevation_m,
         achievements=[
             AchievementOut(code_name=a.code_name, title=a.title, description=a.description)
             for a in achs
         ],
+        checkins_count=checkins_count,
+        visited_locations=visited_locations,
     )

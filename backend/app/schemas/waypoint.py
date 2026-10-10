@@ -29,3 +29,13 @@ class WaypointCreate(BaseModel):
 
 class ModerateRequest(BaseModel):
     status: ContentStatus  # admin ставит published / rejected
+
+
+class WaypointUpdate(BaseModel):
+    """Редактирование точки прямо на карте (админка, ТЗ §3)."""
+
+    title: str | None = None
+    description: str | None = None
+    type: WaypointType | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)

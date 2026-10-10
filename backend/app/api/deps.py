@@ -1,15 +1,15 @@
-"""Общие зависимости API (Шаг 3).
+"""Общие зависимости API (Шаг 3 + ТЗ: иерархия ролей и блокировки).
 
-Временная схема аутентификации Шага 3: клиент после POST /api/auth/init-data
-присылает свой Telegram ID в заголовке ``X-Telegram-Id``. Роль берётся из БД.
-JWT-сессии по спецификации (§5) — следующим шагом.
+Иерархия: user(0) → tester(1) → admin(2) → super_admin(3).
+Проверки идут «не ниже уровня»: tester пускает tester/admin/super_admin и т.д.
+Заблокированные (is_blocked) не проходят ни одну require_* проверку, кроме чтения профиля.
 """
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.enums import UserRole
+from app.models.enums import UserRole, has_role_or_higher
 from app.models.user import User
 
 
@@ -31,8 +31,18 @@ async def get_current_user(
     return user
 
 
+def _ensure_not_blocked(user: User) -> None:
+    if bool(getattr(user, "is_blocked", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Пользователь заблокирован супер-админом",
+        )
+
+
 def require_roles(*roles: UserRole):
+    """Точное совпадение с одной из ролей (для обратной совместимости)."""
     async def checker(user: User = Depends(get_current_user)) -> User:
+        _ensure_not_blocked(user)
         if user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -43,5 +53,23 @@ def require_roles(*roles: UserRole):
     return checker
 
 
-require_tester = require_roles(UserRole.tester, UserRole.admin)
-require_admin = require_roles(UserRole.admin)
+def require_min_role(minimum: UserRole):
+    """Иерархическая проверка: роль не ниже minimum (ТЗ §2)."""
+    async def checker(user: User = Depends(get_current_user)) -> User:
+        _ensure_not_blocked(user)
+        if not has_role_or_higher(user.role, minimum):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Нужна роль не ниже {minimum.value}, текущая: {user.role.value}",
+            )
+        return user
+
+    return checker
+
+
+# Иерархия ТЗ §2:
+# user — всё базовое; tester — + тикеты/тестовые точки;
+# admin — + свои маршруты/привязка тестеров; super_admin — всё.
+require_tester = require_min_role(UserRole.tester)
+require_admin = require_min_role(UserRole.admin)
+require_super_admin = require_min_role(UserRole.super_admin)

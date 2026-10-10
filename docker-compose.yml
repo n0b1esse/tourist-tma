@@ -73,6 +73,27 @@ services:
       - /app/node_modules
       - /app/.next
 
+  # Telegram-бот @tourist_kg_bot (ТЗ §5): polling, нужен TELEGRAM_BOT_TOKEN + MINI_APP_URL в .env
+  bot:
+    build:
+      context: ./backend
+    container_name: tourist-tma-bot
+    restart: unless-stopped
+    command: python -m app.bot
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tourist}:${POSTGRES_PASSWORD:-tourist_secret}@db:5432/${POSTGRES_DB:-tourist_tma}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+    profiles: ["bot"]
+
 volumes:
   pgdata:
   redisdata:

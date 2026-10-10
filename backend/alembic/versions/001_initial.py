@@ -17,13 +17,14 @@ branch_labels = None
 depends_on = None
 
 ENUM_DDLS = [
-    "DO $$ BEGIN CREATE TYPE user_role AS ENUM ('user', 'tester', 'admin'); "
+    "DO $$ BEGIN CREATE TYPE user_role AS ENUM ('user', 'tester', 'admin', 'super_admin'); "
     "EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
     "DO $$ BEGIN CREATE TYPE content_status AS ENUM ('draft', 'review', 'published', 'rejected'); "
     "EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
-    "DO $$ BEGIN CREATE TYPE waypoint_type AS ENUM ('water', 'camp', 'hazard', 'viewpoint', 'rest'); "
+    "DO $$ BEGIN CREATE TYPE waypoint_type AS ENUM ('water', 'camp', 'hazard', 'viewpoint', 'rest', "
+    "'waterfall', 'lake', 'peak', 'camping', 'spring', 'recreation'); "
     "EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
-    "DO $$ BEGIN CREATE TYPE difficulty_level AS ENUM ('Легкий', 'Средний', 'Сложный'); "
+    "DO $$ BEGIN CREATE TYPE difficulty_level AS ENUM ('Легкий', 'Средний', 'Сложный', 'Экстремальный'); "
     "EXCEPTION WHEN duplicate_object THEN NULL; END $$;",
 ]
 
@@ -50,10 +51,11 @@ def upgrade() -> None:
         sa.Column(
             "role",
             # create_type=False: тип уже создан DO-блоком выше, иначе дубль CREATE TYPE
-            sa.Enum("user", "tester", "admin", name="user_role", native_enum=True, create_type=False),
+            sa.Enum("user", "tester", "admin", "super_admin", name="user_role", native_enum=True, create_type=False),
             server_default="user",
             nullable=False,
         ),
+        sa.Column("is_blocked", sa.Boolean, server_default="false", nullable=False),
         sa.Column("total_distance_km", sa.Float, server_default="0.0", nullable=False),
         sa.Column("total_elevation_m", sa.Integer, server_default="0", nullable=False),
         sa.Column("created_at", sa.DateTime, server_default=sa.func.current_timestamp(), nullable=False),
@@ -66,7 +68,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text),
         sa.Column(
             "difficulty",
-            sa.Enum("Легкий", "Средний", "Сложный", name="difficulty_level", native_enum=True, create_type=False),
+            sa.Enum("Легкий", "Средний", "Сложный", "Экстремальный", name="difficulty_level", native_enum=True, create_type=False),
             server_default="Средний",
             nullable=False,
         ),
@@ -85,7 +87,7 @@ def upgrade() -> None:
         sa.Column("created_by", sa.BigInteger, sa.ForeignKey("users.telegram_id", ondelete="SET NULL")),
         sa.Column(
             "type",
-            sa.Enum("water", "camp", "hazard", "viewpoint", "rest", name="waypoint_type", native_enum=True, create_type=False),
+            sa.Enum("water", "camp", "hazard", "viewpoint", "rest", "waterfall", "lake", "peak", "camping", "spring", "recreation", name="waypoint_type", native_enum=True, create_type=False),
             nullable=False,
         ),
         sa.Column("coordinates", geoalchemy2.Geometry("POINT", srid=4326), nullable=False),

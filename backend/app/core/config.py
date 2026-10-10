@@ -35,5 +35,10 @@ class Settings(BaseSettings):
     # Только для локалки: в проде (Render) всегда False по умолчанию.
     DEV_LOGIN_ENABLED: bool = False
 
+    # Mini App URL для кнопки меню бота и deep-линков (ТЗ §5)
+    MINI_APP_URL: str = ""
+    # Радиус чек-ина в метрах (ТЗ §4Б)
+    CHECKIN_RADIUS_M: float = 300.0
+
 
 settings = Settings()

@@ -2,7 +2,7 @@
 
 import type { AppMode, UserRole } from "@/types";
 
-/** Переключатель Production / Tester (§3). Tester доступен tester/admin. */
+/** Переключатель Production / Tester (§3 + ТЗ §2: иерархия — tester/admin/super_admin). */
 export default function ModeSwitcher({
   mode,
   role,
@@ -12,7 +12,7 @@ export default function ModeSwitcher({
   role: UserRole | null;
   onChange: (m: AppMode) => void;
 }) {
-  const canTest = role === "tester" || role === "admin";
+  const canTest = role === "tester" || role === "admin" || role === "super_admin";
   return (
     <div className="flex rounded-full bg-[var(--tma-secondary-bg)] p-1 text-body">
       <button
@@ -28,7 +28,7 @@ export default function ModeSwitcher({
           mode === "tester" ? "bg-draft text-white" : "text-[var(--tma-hint)]"
         } ${canTest ? "" : "opacity-40"}`}
         onClick={() => canTest && onChange("tester")}
-        title={canTest ? "Жёлтый слой черновиков" : "Доступен ролям tester/admin"}
+        title={canTest ? "Жёлтый слой черновиков" : "Доступен ролям tester/admin/super_admin"}
       >
         Tester 🧪
       </button>
