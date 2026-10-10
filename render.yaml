@@ -4,8 +4,10 @@ services:
     env: python
     region: frankfurt
     plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -15,12 +17,19 @@ services:
         sync: false
       - key: MINI_APP_URL
         sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
 
   - type: worker
     name: tourist-tma-bot
     env: python
     region: frankfurt
     plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.bot
     envVars:
@@ -29,4 +38,6 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: MINI_APP_URL
         sync: false
