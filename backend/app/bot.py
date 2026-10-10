@@ -70,151 +70,231 @@ class SupportForm(StatesGroup):
     waiting_text = State()
 
 
-async def cmd_start(message: Message) -> None:
-    # Upsert пользователя (роль не трогаем, как в dev-login)
+async def _safe_answer(message: Message | None, text: str, **kwargs) -> None:
+    """Ответ пользователю, который никогда не роняет хендлер."""
+    if message is None:
+        return
     try:
-        async with SessionLocal() as db:
-            user = await db.get(User, message.from_user.id)
-            if user is None:
-                from app.models.enums import UserRole
+        await message.answer(text, **kwargs)
+    except Exception as exc:
+        log.warning("bot: answer failed: %s", exc)
 
-                user = User(
-                    telegram_id=message.from_user.id,
-                    username=message.from_user.username,
-                    full_name=message.from_user.full_name,
-                    role=UserRole.user,
-                )
-                db.add(user)
-                await db.commit()
-    except Exception as exc:  # БД может быть недоступна — бот всё равно отвечает
-        log.warning("bot: upsert failed: %s", exc)
-    await message.answer(START_TEXT, reply_markup=main_keyboard())
+
+async def _safe_callback_answer(cb: CallbackQuery) -> None:
+    try:
+        await cb.answer()
+    except Exception as exc:
+        log.warning("bot: callback answer failed: %s", exc)
+
+
+async def cmd_start(message: Message) -> None:
+    """/start: регистрация новичка + приветствие. Падение БД — НЕ тишина."""
+    try:
+        from_user = message.from_user
+        if from_user is None:
+            # Сообщения из каналов/анонимных админов — отвечаем без регистрации
+            await _safe_answer(message, START_TEXT, reply_markup=main_keyboard())
+            return
+        # Upsert пользователя (роль не трогаем, как в dev-login)
+        try:
+            async with SessionLocal() as db:
+                try:
+                    user = await db.get(User, from_user.id)
+                    if user is None:
+                        from app.models.enums import UserRole
+
+                        user = User(
+                            telegram_id=from_user.id,
+                            username=from_user.username,
+                            full_name=from_user.full_name,
+                            role=UserRole.user,
+                        )
+                        db.add(user)
+                        await db.commit()
+                        log.info("bot: new user registered: %s", from_user.id)
+                except Exception:
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+                    raise
+        except Exception as exc:  # БД может быть недоступна — бот всё равно отвечает
+            log.warning("bot: upsert failed: %s", exc)
+        await _safe_answer(message, START_TEXT, reply_markup=main_keyboard())
+    except Exception as exc:  # последний рубеж — бот не уходит в тишину
+        log.exception("bot: cmd_start crashed: %s", exc)
+        await _safe_answer(message, START_TEXT, reply_markup=main_keyboard())
 
 
 async def cb_top_routes(cb: CallbackQuery) -> None:
     try:
-        async with SessionLocal() as db:
-            from sqlalchemy import select
+        try:
+            async with SessionLocal() as db:
+                from sqlalchemy import select
 
-            rows = (await db.execute(select(Route).order_by(Route.id).limit(5))).scalars().all()
-    except Exception as exc:
-        log.warning("bot: top routes failed: %s", exc)
-        rows = []
-    if not rows:
-        await cb.message.answer("Маршрутов пока нет — загляни позже 🥾", reply_markup=main_keyboard())
-        await cb.answer()
-        return
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"⛰ {r.title[:40]}",
-                    web_app=WebAppInfo(url=f"{MINI_APP_URL}?route={r.id}"),
-                )
+                rows = (await db.execute(select(Route).order_by(Route.id).limit(5))).scalars().all()
+        except Exception as exc:
+            log.warning("bot: top routes failed: %s", exc)
+            rows = []
+        if not rows:
+            await _safe_answer(cb.message, "Маршрутов пока нет — загляни позже 🥾", reply_markup=main_keyboard())
+            return
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"⛰ {r.title[:40]}",
+                        web_app=WebAppInfo(url=f"{MINI_APP_URL}?route={r.id}"),
+                    )
+                ]
+                for r in rows
             ]
-            for r in rows
-        ]
-        + [[InlineKeyboardButton(text="« Назад", callback_data="back_start")]]
-    )
-    lines = ["🏔️ <b>Топ-5 хайков:</b>"]
-    for i, r in enumerate(rows, 1):
-        diff = r.difficulty.value if hasattr(r.difficulty, "value") else r.difficulty
-        lines.append(f"{i}. <b>{html.escape(r.title)}</b> — {html.escape(str(diff))}, {r.distance_km} км")
-    await cb.message.answer("\n".join(lines), reply_markup=kb)
-    await cb.answer()
+            + [[InlineKeyboardButton(text="« Назад", callback_data="back_start")]]
+        )
+        lines = ["🏔️ <b>Топ-5 хайков:</b>"]
+        for i, r in enumerate(rows, 1):
+            diff = r.difficulty.value if hasattr(r.difficulty, "value") else r.difficulty
+            lines.append(f"{i}. <b>{html.escape(r.title)}</b> — {html.escape(str(diff))}, {r.distance_km} км")
+        await _safe_answer(cb.message, "\n".join(lines), reply_markup=kb)
+    except Exception as exc:
+        log.exception("bot: cb_top_routes crashed: %s", exc)
+        await _safe_answer(cb.message, "Что-то пошло не так, попробуй позже 🙏", reply_markup=main_keyboard())
+    finally:
+        await _safe_callback_answer(cb)
 
 
 async def cb_profile(cb: CallbackQuery) -> None:
     try:
-        async with SessionLocal() as db:
-            from sqlalchemy import func, select
+        if cb.from_user is None:
+            await _safe_answer(cb.message, "Не вижу твой профиль 🙂")
+            return
+        try:
+            async with SessionLocal() as db:
+                from sqlalchemy import func, select
 
-            from app.models.achievement import Achievement, UserAchievement
-            from app.models.checkin import Checkin
+                from app.models.achievement import Achievement, UserAchievement
+                from app.models.checkin import Checkin
 
-            user = await db.get(User, cb.from_user.id)
-            if user is None:
-                await cb.message.answer("Профиль не найден — нажми /start ещё раз 🙂")
-                await cb.answer()
-                return
-            checkins = (
-                await db.execute(
-                    select(func.count()).select_from(Checkin).where(Checkin.telegram_id == user.telegram_id)
-                )
-            ).scalar() or 0
-            achs = (
-                await db.execute(
-                    select(Achievement)
-                    .join(UserAchievement, UserAchievement.achievement_id == Achievement.id)
-                    .where(UserAchievement.telegram_id == user.telegram_id)
-                )
-            ).scalars().all()
+                user = await db.get(User, cb.from_user.id)
+                if user is None:
+                    await _safe_answer(cb.message, "Профиль не найден — нажми /start ещё раз 🙂")
+                    return
+                checkins = (
+                    await db.execute(
+                        select(func.count()).select_from(Checkin).where(Checkin.telegram_id == user.telegram_id)
+                    )
+                ).scalar() or 0
+                achs = (
+                    await db.execute(
+                        select(Achievement)
+                        .join(UserAchievement, UserAchievement.achievement_id == Achievement.id)
+                        .where(UserAchievement.telegram_id == user.telegram_id)
+                    )
+                ).scalars().all()
+        except Exception as exc:
+            log.warning("bot: profile failed: %s", exc)
+            await _safe_answer(cb.message, "Не смог загрузить профиль, попробуй позже 🙏")
+            return
+        badges = ", ".join(f"🏅 {a.title}" for a in achs) if achs else "пока нет — выйди на маршрут 🥾"
+        role = user.role.value if hasattr(user.role, "value") else user.role
+        await _safe_answer(
+            cb.message,
+            f"👤 <b>{html.escape(user.full_name or user.username or 'Турист')}</b>\n"
+            f"Роль: <b>{html.escape(str(role))}</b>\n"
+            f"📏 {user.total_distance_km or 0} км · ⛰ {user.total_elevation_m or 0} м\n"
+            f"📍 Чек-инов: <b>{checkins}</b>\n"
+            f"Достижения: {badges}",
+            reply_markup=main_keyboard(),
+        )
     except Exception as exc:
-        log.warning("bot: profile failed: %s", exc)
-        await cb.message.answer("Не смог загрузить профиль, попробуй позже 🙏")
-        await cb.answer()
-        return
-    badges = ", ".join(f"🏅 {a.title}" for a in achs) if achs else "пока нет — выйди на маршрут 🥾"
-    role = user.role.value if hasattr(user.role, "value") else user.role
-    await cb.message.answer(
-        f"👤 <b>{html.escape(user.full_name or user.username or 'Турист')}</b>\n"
-        f"Роль: <b>{html.escape(str(role))}</b>\n"
-        f"📏 {user.total_distance_km or 0} км · ⛰ {user.total_elevation_m or 0} м\n"
-        f"📍 Чек-инов: <b>{checkins}</b>\n"
-        f"Достижения: {badges}",
-        reply_markup=main_keyboard(),
-    )
-    await cb.answer()
+        log.exception("bot: cb_profile crashed: %s", exc)
+        await _safe_answer(cb.message, "Что-то пошло не так, попробуй позже 🙏", reply_markup=main_keyboard())
+    finally:
+        await _safe_callback_answer(cb)
 
 
 async def cb_support(cb: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(SupportForm.waiting_text)
-    await cb.message.answer(
-        "🆘 <b>Поддержка / обратная связь</b>\n\n"
-        "Напиши сообщение администраторам одним текстом — передам супер-админу.\n"
-        "Для отмены отправь /cancel."
-    )
-    await cb.answer()
+    try:
+        await state.set_state(SupportForm.waiting_text)
+        await _safe_answer(
+            cb.message,
+            "🆘 <b>Поддержка / обратная связь</b>\n\n"
+            "Напиши сообщение администраторам одним текстом — передам супер-админу.\n"
+            "Для отмены отправь /cancel.",
+        )
+    except Exception as exc:
+        log.exception("bot: cb_support crashed: %s", exc)
+    finally:
+        await _safe_callback_answer(cb)
 
 
 async def cb_back(cb: CallbackQuery) -> None:
-    await cb.message.answer(START_TEXT, reply_markup=main_keyboard())
-    await cb.answer()
+    try:
+        await _safe_answer(cb.message, START_TEXT, reply_markup=main_keyboard())
+    except Exception as exc:
+        log.exception("bot: cb_back crashed: %s", exc)
+    finally:
+        await _safe_callback_answer(cb)
 
 
 async def support_text(message: Message, state: FSMContext, bot: Bot) -> None:
-    text = (message.text or "").strip()
-    if not text:
-        await message.answer("Пустое сообщение — попробуй ещё раз или /cancel")
-        return
     try:
-        async with SessionLocal() as db:
-            db.add(
-                Ticket(
-                    telegram_id=message.from_user.id,
-                    kind="feedback",
-                    subject="Из бота",
-                    message=text[:4000],
-                    status="open",
-                )
-            )
-            await db.commit()
-        # Дублируем супер-админу в личку
-        if settings.ADMIN_TELEGRAM_ID and settings.ADMIN_TELEGRAM_ID != message.from_user.id:
-            name = html.escape(message.from_user.full_name or str(message.from_user.id))
-            await bot.send_message(
-                settings.ADMIN_TELEGRAM_ID,
-                f"🆘 <b>Поддержка от {name}</b> (id <code>{message.from_user.id}</code>):\n{html.escape(text[:1000])}",
-            )
+        text = (message.text or "").strip()
+        if not text:
+            await _safe_answer(message, "Пустое сообщение — попробуй ещё раз или /cancel")
+            return
+        from_user = message.from_user
+        if from_user is None:
+            await _safe_answer(message, "Не вижу отправителя 🙂")
+            await state.clear()
+            return
+        try:
+            async with SessionLocal() as db:
+                try:
+                    db.add(
+                        Ticket(
+                            telegram_id=from_user.id,
+                            kind="feedback",
+                            subject="Из бота",
+                            message=text[:4000],
+                            status="open",
+                        )
+                    )
+                    await db.commit()
+                except Exception:
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+                    raise
+            # Дублируем супер-админу в личку (best-effort)
+            if settings.ADMIN_TELEGRAM_ID and settings.ADMIN_TELEGRAM_ID != from_user.id:
+                try:
+                    name = html.escape(from_user.full_name or str(from_user.id))
+                    await bot.send_message(
+                        settings.ADMIN_TELEGRAM_ID,
+                        f"🆘 <b>Поддержка от {name}</b> (id <code>{from_user.id}</code>):\n{html.escape(text[:1000])}",
+                    )
+                except Exception as exc:
+                    log.warning("bot: admin DM failed: %s", exc)
+        except Exception as exc:
+            log.warning("bot: support save failed: %s", exc)
+        try:
+            await state.clear()
+        except Exception as exc:
+            log.warning("bot: state clear failed: %s", exc)
+        await _safe_answer(message, "✅ Спасибо! Сообщение передано администраторам 🙌", reply_markup=main_keyboard())
     except Exception as exc:
-        log.warning("bot: support save failed: %s", exc)
-    await state.clear()
-    await message.answer("✅ Спасибо! Сообщение передано администраторам 🙌", reply_markup=main_keyboard())
+        log.exception("bot: support_text crashed: %s", exc)
+        await _safe_answer(message, "Что-то пошло не так, попробуй позже 🙏", reply_markup=main_keyboard())
 
 
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer("Отменено. Чем помочь?", reply_markup=main_keyboard())
+    try:
+        await state.clear()
+    except Exception as exc:
+        log.warning("bot: state clear failed: %s", exc)
+    await _safe_answer(message, "Отменено. Чем помочь?", reply_markup=main_keyboard())
 
 
 async def setup_menu_button(bot: Bot) -> None:
@@ -228,6 +308,14 @@ async def setup_menu_button(bot: Bot) -> None:
         log.warning("bot: menu button failed: %s", exc)
 
 
+async def on_error(event) -> None:
+    """Глобальный перехват ошибок диспетчера: логируем, тишина исключена."""
+    try:
+        log.exception("bot: unhandled error: %s", getattr(event, "exception", event))
+    except Exception:
+        pass
+
+
 def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     dp.message.register(cmd_start, CommandStart())
@@ -238,6 +326,7 @@ def build_dispatcher() -> Dispatcher:
     dp.callback_query.register(cb_support, F.data == "support")
     dp.callback_query.register(cb_back, F.data == "back_start")
     dp.message.register(support_text, SupportForm.waiting_text)
+    dp.error.register(on_error)
     return dp
 
 
@@ -249,10 +338,40 @@ async def main() -> None:
         token=settings.TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    # Fail-fast: проверяем токен и сеть ДО polling — иначе молчание без диагноза
+    try:
+        me = await bot.get_me()
+        log.info("bot: token OK, running as @%s (id %s)", me.username, me.id)
+    except Exception as exc:
+        log.error("bot: get_me failed — проверь TELEGRAM_BOT_TOKEN и сеть: %s", exc)
+        raise SystemExit(f"TELEGRAM_BOT_TOKEN недействителен или нет сети: {exc}") from exc
+    log.info("bot: mode=polling (webhook не настроен — слушаем getUpdates), mini_app=%s", MINI_APP_URL or "?")
     await setup_menu_button(bot)
     dp = build_dispatcher()
-    log.info("bot: polling started")
-    await dp.start_polling(bot)
+    # Повторы при сетевых сбоях; конфликт второго инстанса — сразу в лог без ретраев
+    retries = 0
+    while True:
+        try:
+            log.info("bot: polling started (attempt %s)", retries + 1)
+            await dp.start_polling(bot)
+            break  # штатная остановка
+        except Exception as exc:
+            name = type(exc).__name__
+            msg = str(exc)
+            if "Conflict" in name or "conflict" in msg or "terminated by other getUpdates" in msg:
+                log.error(
+                    "bot: polling CONFLICT — второй инстанс бота уже слушает обновления. "
+                    "Останови дубль (Render/Docker) и перезапусти. %s: %s",
+                    name, msg,
+                )
+                break
+            retries += 1
+            if retries >= 5:
+                log.error("bot: polling failed %s раз подряд, сдаюсь: %s: %s", retries, name, msg)
+                raise
+            delay = min(5 * retries, 30)
+            log.warning("bot: polling error (%s: %s), retry через %s c", name, msg, delay)
+            await asyncio.sleep(delay)
 
 
 if __name__ == "__main__":

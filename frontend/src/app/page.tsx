@@ -44,14 +44,23 @@ import {
 } from "@/utils/api";
 import {
   distanceM,
+  getCachedGeo,
   getColorScheme,
-  getInitData,
   hapticImpact,
   isInsideTelegram,
   notifyReady,
   onThemeChanged,
   requestGeolocation,
+  waitForInitData,
 } from "@/utils/telegram";
+import {
+  isGuestId,
+  loadDataCache,
+  loadProfileCache,
+  makeGuestProfile,
+  saveDataCache,
+  saveProfileCache,
+} from "@/utils/offline";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -59,8 +68,11 @@ const DEV_KEY = "tma-dev-telegram-id";
 const CHECKIN_RADIUS_M = 300;
 
 export default function Home() {
-  const [status, setStatus] = useState<"loading" | "login" | "ready">("loading");
+  const [status, setStatus] = useState<"loading" | "login" | "ready" | "error">("loading");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authAttempt, setAuthAttempt] = useState(0);
+  const [hasCache, setHasCache] = useState(false);
+  const [offlineMode, setOfflineMode] = useState(false);
   const [telegramId, setTelegramId] = useState<number | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [tab, setTab] = useState<Tab>("home");
@@ -107,7 +119,10 @@ export default function Home() {
     return onThemeChanged(apply);
   }, []);
 
+  // Авторизация: initData (с ожиданием поздней подгрузки скрипта) → dev-ID → login.
+  // Любая ошибка бэкенда ведёт на экран «error» с Retry/кэшем/гостем, а НЕ на вечную «Загрузку…».
   useEffect(() => {
+    let cancelled = false;
     notifyReady();
     try {
       const params = new URLSearchParams(window.location.search);
@@ -119,67 +134,190 @@ export default function Home() {
     } catch {
       /* ignore */
     }
-    const initData = getInitData();
-    if (initData) {
-      authInitData(initData)
-        .then((u) => {
-          setTelegramId(u.telegram_id);
+    setStatus("loading");
+    setAuthError(null);
+    setHasCache(loadProfileCache() != null);
+    void (async () => {
+      try {
+        // Даём telegram-web-app.js до 3 c на подгрузку (иначе ложный dev-путь внутри Telegram)
+        const initData = await waitForInitData(3000);
+        if (cancelled) return;
+        if (initData) {
+          try {
+            const u = await authInitData(initData);
+            if (cancelled) return;
+            setTelegramId(u.telegram_id);
+            setOfflineMode(false);
+            setStatus("ready");
+          } catch (e) {
+            if (cancelled) return;
+            setAuthError(e instanceof Error ? e.message : String(e));
+            setHasCache(loadProfileCache() != null);
+            setStatus("error");
+          }
+          return;
+        }
+        const saved = typeof window !== "undefined" ? window.localStorage.getItem(DEV_KEY) : null;
+        if (saved && /^\d+$/.test(saved)) {
+          setTelegramId(Number(saved));
+          setOfflineMode(false);
           setStatus("ready");
-        })
-        .catch((e: Error) => {
-          setAuthError(e.message);
+        } else {
           setStatus("login");
-        });
-      return;
-    }
-    const saved = typeof window !== "undefined" ? window.localStorage.getItem(DEV_KEY) : null;
-    if (saved && /^\d+$/.test(saved)) {
-      setTelegramId(Number(saved));
-      setStatus("ready");
-    } else {
-      setStatus("login");
-    }
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setAuthError(e instanceof Error ? e.message : String(e));
+        setHasCache(loadProfileCache() != null);
+        setStatus("error");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authAttempt]);
+
+  // Сторожевой таймер: если «loading» висит дольше 20 c (зависший fetch без abort) —
+  // принудительно показываем экран ошибки вместо вечной «Загрузки…».
+  useEffect(() => {
+    if (status !== "loading") return;
+    const t = setTimeout(() => {
+      setStatus((s) => {
+        if (s !== "loading") return s;
+        setAuthError((prev) => prev ?? "Превышено время ожидания. Сервер не отвечает.");
+        setHasCache(loadProfileCache() != null);
+        return "error";
+      });
+    }, 20000);
+    return () => clearTimeout(t);
+  }, [status, authAttempt]);
+
+  const retryAuth = useCallback(() => {
+    setAuthAttempt((n) => n + 1);
   }, []);
 
+  const continueWithCache = useCallback(() => {
+    const cached = loadProfileCache();
+    if (!cached) return;
+    const data = loadDataCache();
+    setProfile(cached);
+    if (data) {
+      setRoutes(data.routes);
+      setWaypoints(data.waypoints);
+      setMyRoutes(data.myRoutes);
+    }
+    setTelegramId(cached.telegram_id);
+    setOfflineMode(true);
+    setAuthError(null);
+    setStatus("ready");
+  }, []);
+
+  const enterGuestMode = useCallback(() => {
+    const guest = makeGuestProfile();
+    const data = loadDataCache();
+    setProfile(guest);
+    if (data) {
+      setRoutes(data.routes);
+      setWaypoints(data.waypoints);
+      setMyRoutes([]);
+    }
+    setTelegramId(0);
+    setOfflineMode(true);
+    setAuthError(null);
+    setStatus("ready");
+  }, []);
+
+  // Геолокация: мгновенная отрисовка из кэша (без системного промпта),
+  // затем один запрос; свежий кэш requestGeolocation отдаёт сам без промпта.
   useEffect(() => {
     if (status !== "ready") return;
     let alive = true;
-    void requestGeolocation().then((g) => {
-      if (!alive) return;
-      setGeo(g);
-      setGeoNote(
-        g.granted
-          ? null
-          : "GPS недоступен — карта центрирована на Бишкеке. Разреши геолокацию для ближайших точек и чек-инов.",
-      );
-    });
+    try {
+      const instant = getCachedGeo();
+      if (instant) {
+        setGeo(instant);
+        if (!instant.granted) {
+          setGeoNote(
+            "GPS недоступен (последние данные из кэша) — карта центрирована на Бишкеке. Разреши геолокацию для ближайших точек и чек-инов.",
+          );
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    void requestGeolocation()
+      .then((g) => {
+        if (!alive) return;
+        setGeo(g);
+        setGeoNote(
+          g.granted
+            ? null
+            : "GPS недоступен — карта центрирована на Бишкеке. Разреши геолокацию для ближайших точек и чек-инов.",
+        );
+      })
+      .catch(() => {
+        if (!alive) return;
+        // Тихий фолбэк: оставляем кэш/Бишкек, приложение продолжает работать
+        setGeo((prev) => prev ?? { lat: 42.8746, lon: 74.5698, granted: false });
+      });
     return () => {
       alive = false;
     };
   }, [status]);
 
+  // Загрузка данных с частичной деградацией: каждый запрос падает независимо,
+  // успешное кэшируется; профиль при ошибке берём из кэша (офлайн-режим).
   const loadData = useCallback(async (id: number, m: AppMode) => {
     setDataError(null);
-    try {
-      const [p, r, w, mine] = await Promise.all([
-        getProfile(id),
-        getRoutes(id),
-        getWaypoints(id, m),
-        getMyRoutes(id).catch(() => [] as RouteItem[]),
-      ]);
-      setProfile(p);
-      if (m === "tester" && p.role !== "tester" && p.role !== "admin" && p.role !== "super_admin") {
-        setMode("production");
-        setWaypoints(await getWaypoints(id, "production"));
-      } else {
-        setWaypoints(w);
+    if (isGuestId(id)) {
+      // Гость: серверных данных нет — только локальный кэш
+      const data = loadDataCache();
+      if (data) {
+        setRoutes(data.routes);
+        setWaypoints(data.waypoints);
       }
-      setRoutes(r);
-      setMyRoutes(mine);
-      if (shouldShowOnboarding()) setShowOnboarding(true);
-    } catch (e) {
-      setDataError(e instanceof Error ? e.message : String(e));
+      setMyRoutes([]);
+      return;
     }
+    let p: Profile;
+    try {
+      p = await getProfile(id);
+      saveProfileCache(p);
+      setOfflineMode(false);
+    } catch (e) {
+      const cached = loadProfileCache();
+      if (cached && cached.telegram_id === id) {
+        p = cached;
+        setOfflineMode(true);
+        setDataError("Офлайн-режим: показаны сохранённые данные. Проверь соединение.");
+      } else {
+        setDataError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    }
+    setProfile(p);
+    const [r, w, mine] = await Promise.all([
+      getRoutes(id).catch(() => loadDataCache()?.routes ?? []),
+      (async () => {
+        try {
+          const wp = await getWaypoints(id, m);
+          if (m === "tester" && p.role !== "tester" && p.role !== "admin" && p.role !== "super_admin") {
+            setMode("production");
+            return await getWaypoints(id, "production").catch(() => loadDataCache()?.waypoints ?? []);
+          }
+          return wp;
+        } catch {
+          return loadDataCache()?.waypoints ?? [];
+        }
+      })(),
+      getMyRoutes(id).catch(() => loadDataCache()?.myRoutes ?? [] as RouteItem[]),
+    ]);
+    setRoutes(r);
+    setWaypoints(w);
+    setMyRoutes(mine);
+    saveDataCache({ routes: r, waypoints: w, myRoutes: mine });
+    if (shouldShowOnboarding()) setShowOnboarding(true);
   }, []);
 
   useEffect(() => {
@@ -188,7 +326,7 @@ export default function Home() {
   }, [status, telegramId, mode]);
 
   const refreshAll = useCallback(async () => {
-    if (telegramId == null) return;
+    if (telegramId == null || isGuestId(telegramId)) return;
     try {
       const [p, r, mine] = await Promise.all([
         getProfile(telegramId),
@@ -196,12 +334,15 @@ export default function Home() {
         getMyRoutes(telegramId).catch(() => [] as RouteItem[]),
       ]);
       setProfile(p);
+      saveProfileCache(p);
       setRoutes(r);
       setMyRoutes(mine);
+      saveDataCache({ routes: r, waypoints, myRoutes: mine });
+      setOfflineMode(false);
     } catch (e) {
       setDataError(e instanceof Error ? e.message : String(e));
     }
-  }, [telegramId]);
+  }, [telegramId, waypoints]);
 
   const handleDevLogin = async () => {
     if (!/^\d+$/.test(devInput.trim())) {
@@ -267,6 +408,10 @@ export default function Home() {
 
   const doCheckin = async () => {
     if (telegramId == null || !nearestInRadius || !geo) return;
+    if (isGuestId(telegramId)) {
+      setCheckinMsg("👀 Гостевой режим: чек-ины не сохраняются. Войди через Telegram, чтобы собирать бейджи.");
+      return;
+    }
     setCheckinBusy(true);
     setCheckinMsg(null);
     try {
@@ -328,6 +473,10 @@ export default function Home() {
     photo_url: string | null;
   }) => {
     if (telegramId == null || pendingTrack == null) return;
+    if (isGuestId(telegramId)) {
+      setTrackError("👀 Гостевой режим: трек не сохранится на сервере. Войди через Telegram для сохранения.");
+      return;
+    }
     setTrackBusy(true);
     setTrackError(null);
     try {
@@ -358,7 +507,47 @@ export default function Home() {
   };
 
   if (status === "loading") {
-    return <main className="p-6 text-body">Загрузка…</main>;
+    return (
+      <main className="mx-auto max-w-md space-y-3 p-6 text-center">
+        <div className="text-4xl animate-pulse">🏔️</div>
+        <p className="text-body">Загрузка…</p>
+        <p className="text-caption text-[var(--tma-hint)]">Подключаемся к серверу (до 10 c)…</p>
+      </main>
+    );
+  }
+
+  // Ошибка сети/бэкенда: НИКОГДА не вечная «Загрузка…» — Retry + кэш + гость.
+  if (status === "error") {
+    return (
+      <main className="mx-auto max-w-md space-y-3 p-6 text-center">
+        <div className="text-5xl">🛰</div>
+        <h1 className="text-h1">Не получилось подключиться</h1>
+        <p className="text-body text-[var(--tma-hint)]">{authError ?? "Сервер недоступен."}</p>
+        <button
+          onClick={retryAuth}
+          className="w-full rounded-xl bg-primary py-2.5 font-semibold text-white"
+        >
+          🔄 Повторить попытку
+        </button>
+        {hasCache && (
+          <button
+            onClick={continueWithCache}
+            className="w-full rounded-xl bg-[var(--tma-secondary-bg)] py-2.5 font-semibold"
+          >
+            📦 Продолжить с сохранёнными данными
+          </button>
+        )}
+        <button
+          onClick={enterGuestMode}
+          className="w-full rounded-xl bg-[var(--tma-secondary-bg)] py-2.5 font-semibold"
+        >
+          👀 Войти как гость (карта и трекер без сервера)
+        </button>
+        <button onClick={() => setStatus("login")} className="text-caption text-[var(--tma-hint)] underline">
+          Войти по Telegram ID вручную
+        </button>
+      </main>
+    );
   }
 
   if (status === "login" || telegramId == null) {
@@ -369,8 +558,8 @@ export default function Home() {
           <p className="text-body">Открывай Mini App из Telegram — вход автоматический.</p>
         ) : (
           <p className="text-body text-[var(--tma-hint)]">
-            Вне Telegram (локальный тест): введи Telegram ID. Если пользователя нет в БД —
-            он создастся автоматически тестовым (роль user).
+            Вне Telegram (локальный тест): введи Telegram ID, будет создан мок-профиль.
+            Если пользователя нет в БД — он создастся автоматически тестовым (роль user).
           </p>
         )}
         <input
@@ -385,6 +574,12 @@ export default function Home() {
           className="w-full rounded-xl bg-primary py-2.5 font-semibold text-white"
         >
           Войти локально
+        </button>
+        <button
+          onClick={enterGuestMode}
+          className="w-full rounded-xl bg-[var(--tma-secondary-bg)] py-2.5 font-semibold"
+        >
+          👀 Продолжить как гость
         </button>
         {authError && <p className="text-body text-accent">{authError}</p>}
       </main>
@@ -426,6 +621,11 @@ export default function Home() {
         </button>
       </div>
 
+      {offlineMode && (
+        <p className="mb-2 rounded-xl bg-draft/20 p-2 text-caption">
+          📦 Офлайн/гостевой режим — данные могут быть устаревшими. {isGuestId(telegramId) ? "Войди через Telegram для синхронизации." : "Нажми \"Повторить\" на экране ошибки или обнови страницу."}
+        </p>
+      )}
       {dataError && <p className="mb-2 text-body text-accent">{dataError}</p>}
       {geoNote && (
         <p className="mb-2 rounded-xl bg-[var(--tma-secondary-bg)] p-2 text-caption text-[var(--tma-hint)]">

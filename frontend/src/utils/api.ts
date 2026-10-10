@@ -19,22 +19,50 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+/** Дефолтный таймаут API-запросов: 10 c (защита от вечной «Загрузки…»). */
+export const API_TIMEOUT_MS = 10000;
+
+export class ApiTimeoutError extends Error {
+  constructor(path: string, ms: number) {
+    super(`Сервер не отвечает дольше ${Math.round(ms / 1000)} c (${path}). Проверь интернет и нажми «Повторить».`);
+    this.name = "ApiTimeoutError";
+  }
+}
+
 async function req<T>(
   path: string,
   telegramId: number | null,
-  init?: RequestInit,
+  init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(telegramId != null ? { "X-Telegram-Id": String(telegramId) } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
+  const timeoutMs = init?.timeoutMs ?? API_TIMEOUT_MS;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(telegramId != null ? { "X-Telegram-Id": String(telegramId) } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e instanceof DOMException && e.name === "AbortError") throw new ApiTimeoutError(path, timeoutMs);
+    throw new Error(`Нет связи с сервером (${path}). Проверь интернет или попробуй позже.`);
+  }
+  clearTimeout(timer);
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API ${res.status} ${path}: ${detail}`);
+    let detail = "";
+    try {
+      detail = await res.text();
+    } catch {
+      /* ignore */
+    }
+    if (res.status >= 500) throw new Error(`Сервер временно недоступен (${res.status}). Попробуй через минуту.`);
+    throw new Error(`API ${res.status} ${path}: ${detail.slice(0, 300)}`);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -160,11 +188,21 @@ export function importTrack(
 
 export async function exportTrackUrl(telegramId: number, id: number, format: "gpx" | "kml" | "geojson"): Promise<string> {
   const API_URL_INNER = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  const res = await fetch(`${API_URL_INNER}/api/routes/${id}/export?format=${format}`, {
-    headers: telegramId != null ? { "X-Telegram-Id": String(telegramId) } : {},
-  });
-  if (!res.ok) throw new Error(`Export ${res.status}`);
-  return await res.text();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_URL_INNER}/api/routes/${id}/export?format=${format}`, {
+      signal: ctrl.signal,
+      headers: telegramId != null ? { "X-Telegram-Id": String(telegramId) } : {},
+    });
+    if (!res.ok) throw new Error(`Export ${res.status}`);
+    return await res.text();
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw new ApiTimeoutError(`/api/routes/${id}/export`, API_TIMEOUT_MS);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // --- Шагомер (Fitness) ---
