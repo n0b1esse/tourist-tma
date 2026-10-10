@@ -31,5 +31,9 @@ class Settings(BaseSettings):
     # "https://tourist-tma.vercel.app,https://web.telegram.org"
     CORS_ORIGINS: str = "*"
 
+    # Dev-вход без подписи Telegram (POST /api/auth/dev-login).
+    # Только для локалки: в проде (Render) всегда False по умолчанию.
+    DEV_LOGIN_ENABLED: bool = False
+
 
 settings = Settings()

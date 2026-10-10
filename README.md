@@ -54,6 +54,7 @@ python tests/test_step3_smoke.py   # API smoke 6/6 без базы
 ## Ключевые эндпоинты
 
 - `POST /api/auth/init-data` — вход по подписи Telegram WebApp
+- `POST /api/auth/dev-login` — локальный вход без подписи (кнопка «Войти локально», только при `DEV_LOGIN_ENABLED=true`, в проде выключен)
 - `GET /api/routes`, `GET /api/routes/{id}` — маршруты + GPX
 - `GET /api/waypoints?mode=production|tester` — точки (tester — только tester/admin)
 - `POST /api/waypoints` — черновик от тестера (+ уведомление супер-админу)

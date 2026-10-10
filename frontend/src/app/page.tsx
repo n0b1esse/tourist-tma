@@ -19,6 +19,7 @@ import type {
 import {
   authInitData,
   createWaypoint,
+  devLogin,
   getProfile,
   getRoutes,
   getWaypoints,
@@ -104,16 +105,21 @@ export default function Home() {
     }
     const id = Number(devInput.trim());
     try {
-      await getProfile(id); // проверяем, что пользователь есть в БД
-      window.localStorage.setItem(DEV_KEY, String(id));
-      setTelegramId(id);
-      setAuthError(null);
-      setStatus("ready");
-    } catch (e) {
-      setAuthError(
-        `Пользователь ${id} не найден: сначала POST /api/auth/init-data. (${e instanceof Error ? e.message : e})`,
-      );
+      // Пользователь уже есть в БД — сразу входим...
+      await getProfile(id);
+    } catch {
+      // ...иначе создаём тестового через POST /api/auth/dev-login
+      try {
+        await devLogin(id);
+      } catch (e) {
+        setAuthError(e instanceof Error ? e.message : String(e));
+        return;
+      }
     }
+    window.localStorage.setItem(DEV_KEY, String(id));
+    setTelegramId(id);
+    setAuthError(null);
+    setStatus("ready");
   };
 
   const handleMapClick = useCallback(
@@ -152,8 +158,8 @@ export default function Home() {
           <p className="text-body">Открывай Mini App из Telegram — вход автоматический.</p>
         ) : (
           <p className="text-body text-[var(--tma-hint)]">
-            Вне Telegram (локальный тест): введи Telegram ID. Пользователь должен существовать в
-            БД — создаётся через POST /api/auth/init-data.
+            Вне Telegram (локальный тест): введи Telegram ID. Если пользователя нет в БД —
+            он создастся автоматически тестовым (роль user).
           </p>
         )}
         <input

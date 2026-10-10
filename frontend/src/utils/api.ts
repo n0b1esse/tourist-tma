@@ -38,6 +38,14 @@ export function authInitData(initData: string): Promise<UserProfile> {
   });
 }
 
+/** Локальный вход: создаёт тестового пользователя, если его нет в БД. */
+export function devLogin(telegramId: number): Promise<UserProfile> {
+  return req<UserProfile>("/api/auth/dev-login", null, {
+    method: "POST",
+    body: JSON.stringify({ telegram_id: telegramId }),
+  });
+}
+
 export function getProfile(telegramId: number): Promise<Profile> {
   return req<Profile>("/api/users/profile", telegramId);
 }

@@ -11,6 +11,14 @@ class InitDataRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class DevLoginRequest(BaseModel):
+    """Локальный вход без подписи Telegram (только при DEV_LOGIN_ENABLED)."""
+
+    telegram_id: int = Field(gt=0)
+    username: str | None = None
+    full_name: str | None = None
+
+
 class UserProfile(BaseModel):
     telegram_id: int
     username: str | None = None
