@@ -111,3 +111,61 @@ async def broadcast_message(chat_ids: list[int], text: str) -> tuple[int, int]:
         else:
             failed += 1
     return sent, failed
+
+
+# --- Push-уведомления о смене роли (ТЗ: PATCH /api/admin/users/{id}/role) ---
+ROLE_MESSAGES: dict[str, str] = {
+    "tester": (
+        "🧪 <b>Вам присвоена роль Тестировщика!</b>\n"
+        "Теперь вы можете отправлять баг-репорты и предлагать новые точки на карте. "
+        "Спасибо за помощь в развитии проекта!"
+    ),
+    "admin": (
+        "🏔️ <b>Вам присвоена роль Организатора / Гида!</b>\n"
+        "Теперь вам доступно создание, публикация и редактирование собственных "
+        "туристических маршрутов и локаций."
+    ),
+    "super_admin": (
+        "⚡ <b>Вам предоставлены права Супер-Администратора!</b>\n"
+        "Вам открыт полный доступ к панели управления проектом и статистике."
+    ),
+    "user": (
+        "ℹ️ <b>Ваша роль была изменена на Пользователь.</b>\n"
+        "Вам доступен стандартный функционал поиска маршрутов и чек-инов."
+    ),
+}
+
+
+def build_role_message(role) -> str:
+    """Текст push-уведомления о смене роли. Чистая функция — покрыта тестом."""
+    value = role.value if hasattr(role, "value") else str(role)
+    return ROLE_MESSAGES.get(value, ROLE_MESSAGES["user"])
+
+
+async def notify_role_change(telegram_id: int, role) -> bool:
+    """Отправить пользователю push о смене роли. Никогда не бросает исключение.
+
+    Best-effort: если пользователь заблокировал бота (aiogram: BotBlocked /
+    TelegramForbiddenError / TelegramAPIError; httpx-вариант: 403 от Bot API),
+    ошибка только логируется и возвращается False. Вызывающий код (admin API)
+    коммитит роль в БД ДО вызова, поэтому смена прав сохраняется в любом случае.
+    """
+    try:
+        text = build_role_message(role)
+        ok = await _send(telegram_id, text)
+        if ok:
+            value = role.value if hasattr(role, "value") else str(role)
+            log.info("notifier: роль %s -> %s уведомлён", telegram_id, value)
+        else:
+            log.warning(
+                "notifier: роль %s не уведомлён (send failed, возможно бот заблокирован)",
+                telegram_id,
+            )
+        return ok
+    except Exception as exc:  # noqa: BLE001 — BotBlocked/TelegramAPIError/httpx
+        log.warning(
+            "notifier: role change push to %s failed (вероятно, бот заблокирован): %s",
+            telegram_id,
+            exc,
+        )
+        return False

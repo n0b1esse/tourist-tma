@@ -7,13 +7,17 @@
 - POST /api/admin/notifications — сервисная рассылка через Bot API
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_super_admin
 from app.core.database import get_db
-from app.core.notifier import broadcast_message
+from app.core.notifier import broadcast_message, notify_role_change
+
+log = logging.getLogger("tourist-tma.admin")
 from app.models.achievement import UserAchievement
 from app.models.checkin import Checkin
 from app.models.checkin import Ticket
@@ -105,6 +109,12 @@ async def set_user_role(
     user.role = body.role
     await db.commit()
     await db.refresh(user)
+    # Push-уведомление о смене роли — best-effort: роль в БД уже сохранена,
+    # ошибка отправки (BotBlocked / TelegramAPIError / блокировка бота) не роняет запрос.
+    try:
+        await notify_role_change(telegram_id, body.role)
+    except Exception as exc:  # noqa: BLE001 — страховка, notify_role_change и так не бросает
+        log.warning("admin: notify_role_change(%s) failed: %s", telegram_id, exc)
     return _out(user)
 
 
