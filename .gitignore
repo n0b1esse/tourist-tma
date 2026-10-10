@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+node_modules/
+.next/
+pgdata/
+*.log
+*.tsbuildinfo
+.DS_Store
+frontend/out/

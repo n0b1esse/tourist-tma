@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Дизайн-токены (§6): бренд-цвета фиксированы, фон/текст — из Telegram-темы */
+:root {
+  --tma-primary: #2d6a4f;
+  --tma-accent: #e07a5f;
+  --tma-draft: #f4a261;
+  --tma-success: #52b788;
+  --tma-bg: var(--tg-theme-bg-color, #ffffff);
+  --tma-text: var(--tg-theme-text-color, #111111);
+  --tma-secondary-bg: var(--tg-theme-secondary-bg-color, #f1f1f1);
+  --tma-hint: var(--tg-theme-hint-color, #999999);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--tma-bg);
+  color: var(--tma-text);
+  font-family: -apple-system, Roboto, "Segoe UI", sans-serif;
+  font-size: 15px;
+}
+
+/* Маркеры карты — цветные точки вместо картинок (без ассетов) */
+.tma-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9999px;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 15px;
+  line-height: 1;
+}
+.tma-marker-published {
+  background: #52b788;
+}
+.tma-marker-draft {
+  background: #f4a261;
+}
+.tma-marker-review {
+  background: #e07a5f;
+}
+.tma-marker-rejected {
+  background: #9e9e9e;
+}

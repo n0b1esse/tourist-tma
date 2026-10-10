@@ -1,0 +1,39 @@
+# Render Blueprint: FastAPI backend (Docker) + Managed Redis.
+# Деплой: Render Dashboard -> New -> Blueprint -> выбрать репозиторий.
+# Секреты DATABASE_URL / TELEGRAM_BOT_TOKEN / ADMIN_TELEGRAM_ID задать
+# в панели Render при первом применении (sync: false).
+
+services:
+  - type: web
+    name: tourist-tma-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /api/health
+    # Миграции перед каждым деплоем (Alembic против Supabase).
+    # Если preDeploy упадёт — деплой остановится, что и требуется.
+    preDeployCommand: "alembic upgrade head"
+    envVars:
+      - key: DATABASE_URL
+        sync: false # Supabase, пример: postgresql+asyncpg://postgres.<ref>:<pass>@aws-0-eu-central-1.pooler.supabase.com:6543/postgres
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: tourist-tma-redis
+          property: connectionString
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # токен от @BotFather, нужен для проверки initData и уведомлений
+      - key: ADMIN_TELEGRAM_ID
+        sync: false # числовой Telegram ID супер-админа для уведомлений о черновиках
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AUTH_DATE_MAX_AGE
+        value: 86400
+      - key: PYTHONUNBUFFERED
+        value: 1
+
+  - type: keyvalue
+    name: tourist-tma-redis
+    plan: free
+    maxmemoryPolicy: noeviction
