@@ -27,5 +27,9 @@ class Settings(BaseSettings):
     # Супер-админ: получает уведомления Telegram о новых черновиках
     ADMIN_TELEGRAM_ID: Annotated[int | None, BeforeValidator(_empty_to_none)] = None
 
+    # CORS: "*" для тестов, в проде — список через запятую, напр.
+    # "https://tourist-tma.vercel.app,https://web.telegram.org"
+    CORS_ORIGINS: str = "*"
+
 
 settings = Settings()

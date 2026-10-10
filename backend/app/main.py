@@ -8,10 +8,12 @@ from app.core.config import settings
 
 app = FastAPI(title="Tourist TMA API", version="0.3.0")
 
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    # "*" + credentials браузеры режут — credentials только при явном списке
+    allow_credentials=_cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
