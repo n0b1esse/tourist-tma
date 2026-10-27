@@ -1,0 +1,36 @@
+name: Keep alive
+
+# Render free tier усыпляет сервис после 15 минут без ВХОДЯЩЕГО трафика.
+# Для бота это критично вдвойне: при long polling запросы к Telegram — исходящие
+# и не считаются. Пинг health-эндпоинта каждые 12 минут не даёт сервису уснуть.
+on:
+  schedule:
+    - cron: "*/12 * * * *"   # :00 :12 :24 :36 :48
+  workflow_dispatch:          # ручной запуск, чтобы разбудить бота сразу
+
+permissions:
+  contents: read              # минимальные права GITHUB_TOKEN
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        env:
+          BACKEND_URL: ${{ secrets.BOT_BACKEND_URL }}
+        run: |
+          # ${VAR%/} срезает случайный слэш в конце секрета.
+          url="${BACKEND_URL%/}/health"
+          if response=$(curl --fail --silent --show-error --max-time 150 \
+                --retry 2 --retry-connrefused \
+                -o /dev/null -w "%{http_code} %{time_total}s" "$url"); then
+            echo "OK: $url → $response"
+          else
+            # Провал НЕ валит воркфлоу: пропущенный пинг компенсируется следующим
+            # через 12 минут, а 120 красных прогонов в день утопят историю CI.
+            echo "::warning::Ping to $url failed. Next scheduled run retries in 12 min."
+          fi
