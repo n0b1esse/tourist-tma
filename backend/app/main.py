@@ -22,6 +22,11 @@ except ImportError as _bot_import_error:
 
 logger = logging.getLogger("tourist-tma.web")
 
+# Логи нашего приложения (бот, lifespan) видны в Stream Render только при
+# настроенном root-логгере: uvicorn конфигурирует исключительно свои логгеры,
+# поэтому INFO из app.* без этой строки не доходит до логов сервиса.
+logging.basicConfig(level=logging.INFO)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
