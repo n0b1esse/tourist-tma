@@ -24,20 +24,7 @@ services:
       - key: CORS_ORIGINS
         sync: false
 
-  - type: worker
-    name: tourist-tma-bot
-    env: python
-    region: frankfurt
-    plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.bot
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
-      - key: DATABASE_URL
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: MINI_APP_URL
-        sync: false
+  # Бот (aiogram, polling) встроен в веб-сервис выше (FastAPI lifespan,
+  # EMBED_TELEGRAM_BOT=true по умолчанию в app.core.config): Render free
+  # не даёт план Background Workers, отдельный worker-сервис не создаётся.
+  # Отдельный запуск остаётся доступным: python -m app.bot (платный воркер/локалка).

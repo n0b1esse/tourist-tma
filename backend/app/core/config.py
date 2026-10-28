@@ -40,5 +40,10 @@ class Settings(BaseSettings):
     # Радиус чек-ина в метрах (ТЗ §4Б)
     CHECKIN_RADIUS_M: float = 300.0
 
+    # Встроенный бот: aiogram polling в процессе веб-сервиса (FastAPI lifespan).
+    # Render free не даёт план Background Workers, поэтому на проде бот живёт
+    # внутри uvicorn. False — для отдельного запуска (python -m app.bot), напр. платный воркер.
+    EMBED_TELEGRAM_BOT: bool = True
+
 
 settings = Settings()

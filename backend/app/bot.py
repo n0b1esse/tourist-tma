@@ -6,6 +6,8 @@
 - Поддержка: FSM-форма текста → тикет супер-админу (таблица tickets + DM)
 
 Запуск: python -m app.bot  (нужен TELEGRAM_BOT_TOKEN; MINI_APP_URL — ссылка на TMA)
+Прод (Render free): бот встроен в веб-сервис через FastAPI lifespan — app.bot.start_embedded
+(EMBED_TELEGRAM_BOT=true по умолчанию); Render free не даёт план Background Workers.
 """
 
 from __future__ import annotations
@@ -330,6 +332,37 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
+async def _polling_loop(bot: Bot, dp: Dispatcher, *, prefix: str = "bot") -> None:
+    """Общий цикл polling: повторы при сетевых сбоях; конфликт второго инстанса — сразу в лог."""
+    retries = 0
+    while True:
+        try:
+            log.info("%s: polling started (attempt %s)", prefix, retries + 1)
+            await dp.start_polling(bot)
+            log.info("%s: polling stopped (штатно)", prefix)
+            break  # штатная остановка
+        except asyncio.CancelledError:
+            log.info("%s: polling cancelled (shutdown)", prefix)
+            raise
+        except Exception as exc:
+            name = type(exc).__name__
+            msg = str(exc)
+            if "Conflict" in name or "conflict" in msg or "terminated by other getUpdates" in msg:
+                log.error(
+                    "%s: polling CONFLICT — второй инстанс бота уже слушает обновления. "
+                    "Останови дубль (Render/Docker) и перезапусти. %s: %s",
+                    prefix, name, msg,
+                )
+                break
+            retries += 1
+            if retries >= 5:
+                log.error("%s: polling failed %s раз подряд, сдаюсь: %s: %s", prefix, retries, name, msg)
+                raise
+            delay = min(5 * retries, 30)
+            log.warning("%s: polling error (%s: %s), retry через %s c", prefix, name, msg, delay)
+            await asyncio.sleep(delay)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     if not settings.TELEGRAM_BOT_TOKEN:
@@ -348,30 +381,61 @@ async def main() -> None:
     log.info("bot: mode=polling (webhook не настроен — слушаем getUpdates), mini_app=%s", MINI_APP_URL or "?")
     await setup_menu_button(bot)
     dp = build_dispatcher()
-    # Повторы при сетевых сбоях; конфликт второго инстанса — сразу в лог без ретраев
-    retries = 0
-    while True:
+    await _polling_loop(bot, dp)
+
+
+async def _embedded_polling() -> None:
+    """Polling внутри процесса uvicorn (Render free: воркеры недоступны).
+
+    Ошибки бота НЕ роняют веб-сервис: после 5 неудач задача завершится,
+    а API продолжит отвечать. Conflict (второй инстанс) — штатный выход из цикла.
+    """
+    bot = Bot(
+        token=settings.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    try:
         try:
-            log.info("bot: polling started (attempt %s)", retries + 1)
-            await dp.start_polling(bot)
-            break  # штатная остановка
+            me = await bot.get_me()
+            log.info("bot(embedded): token OK, running as @%s (id %s)", me.username, me.id)
         except Exception as exc:
-            name = type(exc).__name__
-            msg = str(exc)
-            if "Conflict" in name or "conflict" in msg or "terminated by other getUpdates" in msg:
-                log.error(
-                    "bot: polling CONFLICT — второй инстанс бота уже слушает обновления. "
-                    "Останови дубль (Render/Docker) и перезапусти. %s: %s",
-                    name, msg,
-                )
-                break
-            retries += 1
-            if retries >= 5:
-                log.error("bot: polling failed %s раз подряд, сдаюсь: %s: %s", retries, name, msg)
-                raise
-            delay = min(5 * retries, 30)
-            log.warning("bot: polling error (%s: %s), retry через %s c", name, msg, delay)
-            await asyncio.sleep(delay)
+            log.error("bot(embedded): get_me failed — бот не запущен, API работает: %s", exc)
+            return
+        log.info("bot(embedded): mode=polling (getUpdates), mini_app=%s", MINI_APP_URL or "?")
+        await setup_menu_button(bot)
+        dp = build_dispatcher()
+        await _polling_loop(bot, dp, prefix="bot(embedded)")
+    finally:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+
+
+def _log_polling_task_done(task: asyncio.Task) -> None:
+    """Забираем исключение фоновой задачи, чтобы не копились 'never retrieved'."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error(
+            "bot(embedded): задача polling завершилась ошибкой (API продолжает работу): %s: %s",
+            type(exc).__name__, exc,
+        )
+
+
+def start_embedded() -> asyncio.Task | None:
+    """Точка входа для FastAPI lifespan: polling как фоновая задача в текущем loop."""
+    if not settings.EMBED_TELEGRAM_BOT:
+        log.info("bot(embedded): отключён (EMBED_TELEGRAM_BOT=false)")
+        return None
+    if not settings.TELEGRAM_BOT_TOKEN:
+        log.warning("bot(embedded): TELEGRAM_BOT_TOKEN не задан — бот не запущен, API работает")
+        return None
+    log.info("bot(embedded): запуск polling как фоновой задачи")
+    task = asyncio.create_task(_embedded_polling(), name="telegram-polling")
+    task.add_done_callback(_log_polling_task_done)
+    return task
 
 
 if __name__ == "__main__":

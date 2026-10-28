@@ -34,3 +34,19 @@ jobs:
             # через 12 минут, а 120 красных прогонов в день утопят историю CI.
             echo "::warning::Ping to $url failed. Next scheduled run retries in 12 min."
           fi
+
+      - name: Ping DB-backed endpoint (держит Supabase активным)
+        env:
+          BACKEND_URL: ${{ secrets.BOT_BACKEND_URL }}
+        run: |
+          # Supabase free ставит проект на паузу после ~7 дней без запросов,
+          # а /health БД не трогает. GET /api/routes делает SELECT — этого
+          # достаточно, чтобы счётчик неактивности Supabase обнулялся.
+          # Любой HTTP-ответ (в т.ч. 4xx/5xx) значит: запрос дошёл до БД.
+          url="${BACKEND_URL%/}/api/routes"
+          if code=$(curl --silent --show-error --max-time 90 \
+                -o /dev/null -w "%{http_code}" -H "Accept: application/json" "$url"); then
+            echo "DB: $url → $code (Supabase active)"
+          else
+            echo "::warning::DB ping to $url failed (network). Next scheduled run retries in 12 min."
+          fi

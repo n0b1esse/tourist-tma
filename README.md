@@ -75,7 +75,9 @@ python tests/test_step3_smoke.py   # API smoke 6/6 без базы
 
 Бот (`backend/app/bot.py`, aiogram): `/start` + инлайн-кнопки (Mini App, топ-5, профиль,
 поддержка), Menu Button «Открыть карту» (`MINI_APP_URL`), пуши о бейджах/рассылках/модерации.
-Запуск: `python -m app.bot` при заданных `TELEGRAM_BOT_TOKEN`, `MINI_APP_URL`.
+Запуск: `python -m app.bot` при заданных `TELEGRAM_BOT_TOKEN`, `MINI_APP_URL`;
+на Render бот встроен в веб-сервис (FastAPI lifespan, `EMBED_TELEGRAM_BOT=true`
+по умолчанию — free-план Render не даёт воркеров; отдельный запуск — платный воркер/локалка).
 
 ## Mini App (ТЗ)
 
