@@ -1,0 +1,140 @@
+name: Deploy VPS (Tourist TMA)
+
+# Ручной выклад на VPS «Авто-ответчика». Намеренно НЕ триггерится по push:
+# сначала проверяем вручную, потом при необходимости включаем автодеплой.
+# Прод-стек AImanager не трогается — добавляем только наш backend + статку в Caddy.
+# См. docs/VPS.md (разовые шаги DNS/Caddy и список secrets).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref с docker-compose.vps.yml (ветка или main)"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: build static Mini App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: https://tma.avto-otvetchik.com
+        run: |
+          npm ci
+          npm run build
+          test -f out/index.html
+          tar -czf ../frontend-out.tgz -C out .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-out
+          path: frontend-out.tgz
+          retention-days: 3
+
+  deploy:
+    name: deploy backend + static over SSH
+    needs: frontend
+    runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST_VPS }}
+      SSH_USER: ${{ secrets.SSH_USER_VPS }}
+      SSH_PORT: ${{ secrets.SSH_PORT_VPS || '22' }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      ADMIN_TELEGRAM_ID: ${{ secrets.ADMIN_TELEGRAM_ID }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+      MINI_APP_URL: ${{ secrets.MINI_APP_URL }}
+      DEPLOY_REF: ${{ inputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Guard secrets
+        run: |
+          [ -n "$SSH_HOST" ] || { echo "::error::SSH_HOST_VPS is empty"; exit 1; }
+          [ -n "$SSH_USER" ] || { echo "::error::SSH_USER_VPS is empty"; exit 1; }
+          [ -n "$DATABASE_URL" ] || { echo "::error::DATABASE_URL is empty"; exit 1; }
+          [ -n "$TELEGRAM_BOT_TOKEN" ] || { echo "::error::TELEGRAM_BOT_TOKEN is empty"; exit 1; }
+          [ -n "$JWT_SECRET" ] || { echo "::error::JWT_SECRET is empty"; exit 1; }
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-out
+          path: .
+
+      - name: Deploy over SSH (read-only to AImanager stacks)
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY_VPS }}" > ~/.ssh/vps_key
+          chmod 600 ~/.ssh/vps_key
+          scp -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new \
+            -P "$SSH_PORT" frontend-out.tgz \
+            "$SSH_USER@$SSH_HOST:/tmp/tma-frontend-out.tgz"
+          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            DEPLOY_REF="$DEPLOY_REF" \
+            DATABASE_URL="$DATABASE_URL" \
+            TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            ADMIN_TELEGRAM_ID="$ADMIN_TELEGRAM_ID" \
+            JWT_SECRET="$JWT_SECRET" \
+            CORS_ORIGINS="$CORS_ORIGINS" \
+            MINI_APP_URL="$MINI_APP_URL" \
+            bash -s <<'REMOTE'
+          set -e
+          mkdir -p /opt/tourist-tma/frontend/out
+          tar -xzf /tmp/tma-frontend-out.tgz -C /opt/tourist-tma/frontend/out
+          rm -f /tmp/tma-frontend-out.tgz
+
+          cd /opt/tourist-tma
+          if [ ! -d .git ]; then
+            git clone https://github.com/n0b1esse/tourist-tma.git .
+          fi
+          git fetch origin "$DEPLOY_REF"
+          git checkout "$DEPLOY_REF"
+          git pull origin "$DEPLOY_REF"
+
+          {
+            echo "DATABASE_URL=$DATABASE_URL"
+            echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
+            echo "ADMIN_TELEGRAM_ID=$ADMIN_TELEGRAM_ID"
+            echo "JWT_SECRET=$JWT_SECRET"
+            echo "CORS_ORIGINS=$CORS_ORIGINS"
+            echo "MINI_APP_URL=$MINI_APP_URL"
+          } > .env
+          chmod 600 .env
+
+          docker compose -f docker-compose.vps.yml up -d --build
+
+          ok=0
+          for i in $(seq 1 30); do
+            if docker exec tourist-tma-backend python3 -c \
+              "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:18000/api/health', timeout=5).read().decode())" 2>/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          [ "$ok" -eq 1 ] || { echo "::error::tourist backend health failed after 60s"; exit 1; }
+
+          echo '--- docker ps ---'
+          docker ps --format '{{.Names}} | {{.Status}}'
+          echo '--- memory ---'
+          free -m
+          echo '--- disk ---'
+          df -h /
+          REMOTE

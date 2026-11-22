@@ -1,0 +1,47 @@
+# VPS «Авто-ответчика» (178.219.159.34): только бэкенд Tourist TMA.
+# БД остаётся в Supabase, Redis не нужен (используется только в /api/health),
+# фронт — статический экспорт Next.js, его отдаёт уже работающий Caddy.
+#
+# Запуск на хосте:
+#   cd /opt/tourist-tma
+#   docker compose -f docker-compose.vps.yml up -d --build
+#
+# Контейнер подключается к внешней сети avto-otvetchik_default, чтобы Caddy
+# из стека AImanager мог резолвить имя tourist-tma-backend и проксировать
+# /api/* без публикации портов на хост.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: tourist-tma-backend:local
+    container_name: tourist-tma-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: 18000
+      # Явно выключаем то, что на VPS не запускается.
+      REDIS_URL: ""
+      DEV_LOGIN_ENABLED: "false"
+      EMBED_TELEGRAM_BOT: "true"
+    expose:
+      - "18000"
+    networks:
+      - avto-otvetchik_default
+    mem_limit: 320m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+networks:
+  avto-otvetchik_default:
+    external: true
